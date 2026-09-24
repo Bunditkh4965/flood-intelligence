@@ -6,4 +6,5 @@ __pycache__/
 .coverage
 frontend/node_modules/
 frontend/.next/
+frontend/tsconfig.tsbuildinfo
 backend/var/
