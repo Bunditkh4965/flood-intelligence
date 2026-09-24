@@ -1,0 +1,9 @@
+[project]
+name = "flood-intelligence-backend"
+version = "0.1.0"
+description = "Backend foundation for the Flood Intelligence Platform"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
