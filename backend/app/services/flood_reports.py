@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core import get_settings
-from app.models.flood_report import FloodReport, FloodReportCodeSequence, SystemConfiguration
+from app.models.flood_report import FloodReport, FloodReportCodeSequence, FloodReportPhoto, SystemConfiguration
 from app.schemas.flood_report import FloodReportCreate, FloodReportRead, LocationRead
 
 VERIFY_RADIUS_CONFIG_KEY = "REPORTER_GPS_VERIFY_RADIUS_M"
@@ -64,7 +64,7 @@ def create_public_report(db: Session, payload: FloodReportCreate) -> FloodReport
             flood_latitude=payload.flood_latitude, flood_longitude=payload.flood_longitude,
         )
     verification_status, verification_reason = verification_for(
-        reporter_gps_available=gps_available, has_photo=payload.has_photo, distance_m=distance_m, radius_m=get_verification_radius_m(db)
+        reporter_gps_available=gps_available, has_photo=False, distance_m=distance_m, radius_m=get_verification_radius_m(db)
     )
     report = FloodReport(
         report_code=allocate_report_code(db, reported_at),
@@ -76,7 +76,8 @@ def create_public_report(db: Session, payload: FloodReportCreate) -> FloodReport
         reporter_flood_distance_m=distance_m, water_level_cm=payload.water_level_cm,
         road_status=payload.road_status, vehicle_4w_status=payload.vehicle_4w_status,
         vehicle_6w_status=payload.vehicle_6w_status, vehicle_10w_status=payload.vehicle_10w_status,
-        description=payload.description, has_photo=payload.has_photo,
+        # Evidence is true only after the upload service has persisted accepted bytes.
+        description=payload.description, has_photo=False,
         verification_status=verification_status, verification_reason=verification_reason,
         source="PUBLIC", status="ACTIVE", reported_at=reported_at,
     )
@@ -87,14 +88,10 @@ def create_public_report(db: Session, payload: FloodReportCreate) -> FloodReport
 
 
 def serialize_report(report: FloodReport) -> FloodReportRead:
-    reporter_location = None
-    if report.reporter_latitude is not None:
-        reporter_location = LocationRead(latitude=report.reporter_latitude, longitude=report.reporter_longitude)
     return FloodReportRead(
         report_code=report.report_code,
         flood_location=LocationRead(latitude=report.flood_latitude, longitude=report.flood_longitude),
-        reporter_location=reporter_location, reporter_gps_accuracy_m=report.reporter_gps_accuracy_m,
-        reporter_flood_distance_m=report.reporter_flood_distance_m, water_level_cm=report.water_level_cm,
+        water_level_cm=report.water_level_cm,
         road_status=report.road_status, vehicle_4w_status=report.vehicle_4w_status,
         vehicle_6w_status=report.vehicle_6w_status, vehicle_10w_status=report.vehicle_10w_status,
         description=report.description, has_photo=report.has_photo, verification_status=report.verification_status,
@@ -118,3 +115,18 @@ def list_reports(db: Session, *, status: str | None = None, verification_status:
 
 def get_report(db: Session, report_code: str) -> FloodReport | None:
     return db.scalar(select(FloodReport).where(FloodReport.report_code == report_code))
+
+
+def record_photo_and_recalculate(db: Session, report: FloodReport, *, storage_key: str, content_type: str, file_size: int) -> FloodReport:
+    """Attach persisted evidence and re-run the authoritative verification rule."""
+    db.add(FloodReportPhoto(flood_report_id=report.id, storage_key=storage_key, content_type=content_type, file_size=file_size))
+    report.has_photo = True
+    report.verification_status, report.verification_reason = verification_for(
+        reporter_gps_available=report.reporter_latitude is not None,
+        has_photo=True,
+        distance_m=report.reporter_flood_distance_m,
+        radius_m=get_verification_radius_m(db),
+    )
+    db.commit()
+    db.refresh(report)
+    return report

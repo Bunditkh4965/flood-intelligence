@@ -110,7 +110,7 @@ curl 'http://localhost:8000/api/v1/branches/nearby?lat=30.2672&lng=-97.7431&radi
 
 `POST /api/v1/flood-reports` accepts an unauthenticated public report. The future client must supply the **flood** coordinates from its map selection and, when permission/device support is available, **reporter** coordinates from browser/device GPS. These are separate fields; no reverse geocoding or manual coordinate entry is implemented. GPS accuracy is accepted in metres when the device supplies it.
 
-Photo evidence is currently represented by `has_photo`; `flood_report_photos` is reserved for external-object-storage metadata and never stores image bytes in PostgreSQL. Public submissions always receive `source: "PUBLIC"`; clients cannot submit another source or internal status.
+The legacy JSON `has_photo` field is accepted for Sprint 3A request compatibility but is not trusted. Sprint 3C derives evidence only from a successfully stored upload; `flood_report_photos` stores external-storage metadata and never image bytes. Public submissions always receive `source: "PUBLIC"`; clients cannot submit another source or internal status.
 
 The `REPORTER_GPS_VERIFY_RADIUS_M` row in `system_configurations` controls the radius and is seeded at **300 metres** (an environment default is available as a fallback). PostGIS calculates and persists the reporter-to-flood geography distance in metres. The rules are:
 
@@ -129,10 +129,10 @@ Endpoints: `POST /api/v1/flood-reports`, `GET /api/v1/flood-reports`, and `GET /
 ```bash
 curl -X POST http://localhost:8000/api/v1/flood-reports \
   -H 'content-type: application/json' \
-  -d '{"flood_latitude":14.123456,"flood_longitude":100.567890,"reporter_latitude":14.124,"reporter_longitude":100.5681,"reporter_gps_accuracy_m":12.5,"water_level_cm":35,"road_status":"PARTIAL","has_photo":true}'
+  -d '{"flood_latitude":14.123456,"flood_longitude":100.567890,"reporter_latitude":14.124,"reporter_longitude":100.5681,"reporter_gps_accuracy_m":12.5,"water_level_cm":35,"road_status":"PARTIAL"}'
 ```
 
-A response includes a collision-safe daily code such as `FR-20260924-00001`, the two location objects, distance, evidence state, verification outcome/reason, public source, and report status. Do not treat a response as reporter identity information.
+A response includes a collision-safe daily code such as `FR-20260924-00001`, the selected flood location, evidence state, verification outcome/reason, public source, and report status. Reporter GPS and the verification distance are deliberately omitted.
 
 ## Official GISTDA flood areas (Sprint 3B)
 
@@ -166,3 +166,53 @@ Read-only endpoints for future map and operations clients are:
 These responses never include the API key or request headers. `gistda_flood_features.geometry` is an SRID 4326 MultiPolygon with a GiST index, ready for future `ST_Intersects`, `ST_DWithin`, and `ST_Distance` queries; Sprint 3B does not perform branch impact classification.
 
 **Evidence types remain separate:** a `PUBLIC` flood report is a crowdsourced point observation submitted through the Sprint 3A API. A `GISTDA` feature is an official external flood-area polygon with its own period and provenance. GISTDA polygons are never converted into public reports, and the public report request schema offers no `source` field with which a caller could forge one.
+
+## Public flood reporting web app (Sprint 3C)
+
+The unauthenticated, mobile-first Thai reporting flow is available at
+`http://localhost:3000/report-flood`. It captures browser geolocation when the
+visitor chooses to allow it, but GPS is optional. Device position only recentres
+the map: the visitor must explicitly tap the OpenStreetMap map to choose the
+observed flood location. The blue circle is device position and the red pin is
+the selected flood point. Tile URL and attribution are isolated in
+`frontend/lib/config.ts`; automated tests mock the map and never contact tiles.
+
+Run it independently:
+
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local
+npm run dev
+```
+
+`NEXT_PUBLIC_API_BASE_URL` selects the FastAPI origin (default
+`http://localhost:8000`). `NEXT_PUBLIC_MAP_TILE_URL` can select another
+OpenStreetMap-compatible tile service; it must not contain a secret browser key.
+The API's comma-separated `CORS_ALLOWED_ORIGINS` defaults to the local web origin.
+Docker Compose also includes the `web` service.
+
+### Photo evidence and verification
+
+The JSON create endpoint remains `POST /api/v1/flood-reports`, followed by
+`POST /api/v1/flood-reports/{report_code}/photos` with multipart field `photo`.
+Creation always ignores the legacy client `has_photo` assertion and begins with
+no photo evidence. Only after an accepted image is persisted and its metadata is
+committed does the service set `has_photo` and recalculate verification using the
+existing backend rule. A failed upload therefore cannot create false verified
+evidence.
+
+`LocalPhotoStorage` is the development implementation of the storage boundary;
+it writes generated UUID object keys beneath `PHOTO_STORAGE_DIRECTORY` (default
+`./var/flood-report-photos`). `PHOTO_MAX_BYTES` defaults to 8 MiB. The server
+checks image signatures for JPEG, PNG, or WebP rather than trusting filenames or
+client MIME values. PostgreSQL stores only object key, detected content type,
+size, and creation time. Filesystem paths and image bytes are never returned or
+stored in the database. The interface can later be backed by Azure Blob or S3.
+
+Reporter coordinates, GPS accuracy, and reporter-to-flood distance remain
+private verification data and are no longer present in public report responses.
+The success UI shows only the report code and verification category. `VERIFIED`
+means location evidence is within the configured radius and a persisted photo
+exists; it does **not** confirm that flooding actually occurred. The UI sends no
+reporter location to analytics services.
