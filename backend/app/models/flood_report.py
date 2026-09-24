@@ -66,6 +66,7 @@ class FloodReportPhoto(Base):
     flood_report_id: Mapped[int] = mapped_column(ForeignKey("flood_reports.id", ondelete="CASCADE"), nullable=False, index=True)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     content_type: Mapped[str | None] = mapped_column(String(100))
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

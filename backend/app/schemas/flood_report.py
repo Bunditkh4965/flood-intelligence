@@ -42,9 +42,6 @@ class LocationRead(BaseModel):
 class FloodReportRead(BaseModel):
     report_code: str
     flood_location: LocationRead
-    reporter_location: LocationRead | None
-    reporter_gps_accuracy_m: float | None
-    reporter_flood_distance_m: float | None
     water_level_cm: float
     road_status: RoadStatus
     vehicle_4w_status: VehicleStatus
@@ -57,3 +54,10 @@ class FloodReportRead(BaseModel):
     source: Literal["PUBLIC", "COMPANY", "GISTDA", "SYSTEM"]
     status: ReportStatus
     reported_at: datetime
+
+
+class FloodReportPhotoRead(BaseModel):
+    report_code: str
+    has_photo: bool
+    verification_status: VerificationStatus
+    verification_reason: str
