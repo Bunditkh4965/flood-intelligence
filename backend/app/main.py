@@ -2,10 +2,12 @@ from fastapi import FastAPI
 
 from app.api.branches import router as branches_router
 from app.api.flood_reports import router as flood_reports_router
+from app.api.gistda import router as gistda_router
 
 app = FastAPI(title="Flood Intelligence Platform", version="0.1.0")
 app.include_router(branches_router)
 app.include_router(flood_reports_router)
+app.include_router(gistda_router)
 
 
 @app.get("/health", tags=["health"])

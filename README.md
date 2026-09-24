@@ -133,3 +133,36 @@ curl -X POST http://localhost:8000/api/v1/flood-reports \
 ```
 
 A response includes a collision-safe daily code such as `FR-20260924-00001`, the two location objects, distance, evidence state, verification outcome/reason, public source, and report status. Do not treat a response as reporter identity information.
+
+## Official GISTDA flood areas (Sprint 3B)
+
+GISTDA integration imports the official external geospatial flood-area datasets for `1day`, `3days`, `7days`, and `30days`. It uses the documented Feature/JSON endpoints under `/features/flood/{period}` rather than scraping pages or treating map tiles as analytical data. The current official OpenAPI security definition supplies the credential in the **`API-Key` HTTP header** (it is not a bearer token or query parameter). The client sends that header only to the configured base URL and deliberately excludes request headers and upstream response bodies from errors and logs.
+
+Configure the runtime outside source control:
+
+```dotenv
+GISTDA_API_KEY=<provided securely by GISTDA>
+GISTDA_API_BASE_URL=https://api-gateway.gistda.or.th/api/2.0/resources
+```
+
+`.env` is ignored by Git; `.env.example` contains blank, non-secret placeholders. Never put a real key in a command committed to the repository. Connection and read timeouts default to 5 and 30 seconds respectively, and requests do not retry indefinitely.
+
+Run an administrator-controlled synchronization from `backend/` (there is intentionally no HTTP trigger endpoint):
+
+```bash
+python -m app.scripts.sync_gistda_flood --period 1day
+python -m app.scripts.sync_gistda_flood --period all
+```
+
+Each response must be a WGS84 GeoJSON `FeatureCollection` (GeoJSON uses longitude, latitude coordinate order). Polygon values are normalized to MultiPolygon without changing coordinate order; MultiPolygon values are preserved. Unsupported, malformed, unclosed, or out-of-range geometries are rejected individually. A response with some good features becomes `PARTIAL`; an unusable/empty response or request failure becomes `FAILED`. Neither partial nor failed imports deactivate the last known good dataset.
+
+Features use a deterministic SHA-256 identity: the published feature ID is preferred when present; otherwise canonical geometry and properties are hashed. Repeating an unchanged import therefore does not duplicate polygons. After a usable replacement is stored transactionally, features absent from that period's latest response are made inactive; other periods are unaffected. Source properties remain JSONB provenance, and every imported row is constrained to `source = GISTDA`. Sync runs record received, inserted, updated, unchanged, and rejected counts.
+
+Read-only endpoints for future map and operations clients are:
+
+- `GET /api/v1/gistda/flood?period=1day&active=true` — a GeoJSON `FeatureCollection`.
+- `GET /api/v1/gistda/status` — latest status, last successful/partial completion, and active feature count for every period.
+
+These responses never include the API key or request headers. `gistda_flood_features.geometry` is an SRID 4326 MultiPolygon with a GiST index, ready for future `ST_Intersects`, `ST_DWithin`, and `ST_Distance` queries; Sprint 3B does not perform branch impact classification.
+
+**Evidence types remain separate:** a `PUBLIC` flood report is a crowdsourced point observation submitted through the Sprint 3A API. A `GISTDA` feature is an official external flood-area polygon with its own period and provenance. GISTDA polygons are never converted into public reports, and the public report request schema offers no `source` field with which a caller could forge one.
