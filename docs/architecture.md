@@ -30,3 +30,12 @@ The nearby service creates a WGS84 query point and uses `ST_DWithin` with a runt
 ## Extensibility
 
 New domains should follow the same layers: a SQLAlchemy model, Pydantic contracts, a service for business/data access logic, and a focused API router. Routing providers and future AI integrations should depend on explicit service interfaces rather than embedding their logic in endpoint handlers.
+
+## Branch master ingestion
+
+`app.services.branch_importer` reads the XLSX Open XML workbook directly and
+validates all source rows before database persistence. Its report records source
+counts, duplicates, every validation error, and inserted/updated counts. A
+workbook with errors is not partially persisted. Valid rows are upserted by the
+existing unique `store_number` index, and their PostGIS location expression is
+constructed as `ST_MakePoint(longitude, latitude)` with SRID 4326.

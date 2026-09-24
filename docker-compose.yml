@@ -25,6 +25,7 @@ services:
     volumes:
       - ./backend:/app
       - ./database:/database
+      - ./Stores Master Sep2026.xlsx:/data/Stores Master Sep2026.xlsx:ro
     depends_on:
       db:
         condition: service_healthy

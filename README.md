@@ -61,6 +61,40 @@ pytest
 
 The unit test suite does not require a running database. Spatial behavior is implemented in PostGIS and should be exercised against the Docker database in deployment/integration pipelines.
 
+## Branch master import
+
+The committed `Stores Master Sep2026.xlsx` source is imported without modifying
+the workbook. Validate it first (this validates every row and produces a JSON
+report):
+
+```bash
+cd backend
+python scripts/import_branches.py ../'Stores Master Sep2026.xlsx' --validate-only
+```
+
+To import into PostgreSQL/PostGIS after migrations are applied, omit
+`--validate-only`. The importer rejects the entire persistence operation when
+the source has validation errors, detects duplicate store numbers, upserts by
+`StoreNumber`, and writes locations with `POINT(longitude latitude)`.
+
+### Reproducible PostGIS integration environment
+
+The existing Compose stack supplies PostgreSQL with PostGIS and mounts the
+committed workbook read-only at `/data/Stores Master Sep2026.xlsx` in the API
+container. The API startup command runs Alembic migrations before it starts.
+
+```bash
+docker compose -p flood-intelligence-sprint2-test --env-file .env.sprint2test.example up --build -d db api
+docker compose -p flood-intelligence-sprint2-test --env-file .env.sprint2test.example exec api alembic -c /database/alembic.ini upgrade head
+docker compose -p flood-intelligence-sprint2-test --env-file .env.sprint2test.example exec api python scripts/import_branches.py /data/'Stores Master Sep2026.xlsx'
+docker compose -p flood-intelligence-sprint2-test --env-file .env.sprint2test.example exec api pytest -m integration -q tests/test_branch_importer_integration.py
+```
+
+The integration test runs the existing Alembic migrations, clears the `branches` table, imports the actual workbook,
+then verifies the expected row count, unique store numbers, scalar coordinates,
+non-null geography points, longitude/latitude point ordering, and a spatial
+nearby query. It requires `DATABASE_URL` and a migrated PostGIS database.
+
 ## API examples
 
 ```bash
