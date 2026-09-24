@@ -105,3 +105,31 @@ curl 'http://localhost:8000/api/v1/branches/nearby?lat=30.2672&lng=-97.7431&radi
 ```
 
 `/api/v1/branches/nearby` returns only branches inside the caller-provided radius, ordered by straight-line distance. Coordinates are validated to latitude `[-90, 90]` and longitude `[-180, 180]`.
+
+## Public flood reporting (Sprint 3A)
+
+`POST /api/v1/flood-reports` accepts an unauthenticated public report. The future client must supply the **flood** coordinates from its map selection and, when permission/device support is available, **reporter** coordinates from browser/device GPS. These are separate fields; no reverse geocoding or manual coordinate entry is implemented. GPS accuracy is accepted in metres when the device supplies it.
+
+Photo evidence is currently represented by `has_photo`; `flood_report_photos` is reserved for external-object-storage metadata and never stores image bytes in PostgreSQL. Public submissions always receive `source: "PUBLIC"`; clients cannot submit another source or internal status.
+
+The `REPORTER_GPS_VERIFY_RADIUS_M` row in `system_configurations` controls the radius and is seeded at **300 metres** (an environment default is available as a fallback). PostGIS calculates and persists the reporter-to-flood geography distance in metres. The rules are:
+
+| Situation | Status | Reason |
+| --- | --- | --- |
+| GPS + photo + distance within radius | `VERIFIED` | `GPS_WITHIN_RADIUS_AND_PHOTO` |
+| GPS + photo + distance outside radius | `PENDING_REVIEW` | `GPS_OUTSIDE_RADIUS_WITH_PHOTO` |
+| GPS + no photo | `PENDING_REVIEW` | `GPS_WITHOUT_PHOTO` |
+| No GPS + photo | `PENDING_REVIEW` | `NO_REPORTER_GPS_WITH_PHOTO` |
+| No GPS + no photo | `UNVERIFIED` | `NO_REPORTER_GPS_NO_PHOTO` |
+
+**`VERIFIED` means only that location evidence met this system rule. It does not mean the flood event has been independently or scientifically confirmed.**
+
+Endpoints: `POST /api/v1/flood-reports`, `GET /api/v1/flood-reports`, and `GET /api/v1/flood-reports/{report_code}`. The list endpoint supports `status`, `verification_status`, `reported_from`, `reported_to`, and optional `min_latitude`, `max_latitude`, `min_longitude`, and `max_longitude` bounding-box filters.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/flood-reports \
+  -H 'content-type: application/json' \
+  -d '{"flood_latitude":14.123456,"flood_longitude":100.567890,"reporter_latitude":14.124,"reporter_longitude":100.5681,"reporter_gps_accuracy_m":12.5,"water_level_cm":35,"road_status":"PARTIAL","has_photo":true}'
+```
+
+A response includes a collision-safe daily code such as `FR-20260924-00001`, the two location objects, distance, evidence state, verification outcome/reason, public source, and report status. Do not treat a response as reporter identity information.
