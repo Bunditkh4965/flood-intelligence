@@ -5,7 +5,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.db.base import Base
-from app.models import Branch  # noqa: F401 - register table metadata
+from app.models import Branch, DistributionCenter, TransportRoute  # noqa: F401 - register table metadata
 
 config = context.config
 if config.config_file_name:

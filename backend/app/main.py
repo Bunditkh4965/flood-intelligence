@@ -8,6 +8,8 @@ from app.api.gistda import router as gistda_router
 from app.api.flood_impact import router as flood_impact_router
 from app.api.public_flood_impact import router as public_flood_impact_router
 from app.api.branch_flood_situation import router as branch_flood_situation_router
+from app.api.distribution_centers import router as distribution_centers_router
+from app.api.routes import router as routes_router
 
 app = FastAPI(title="Flood Intelligence Platform", version="0.1.0")
 origins = [origin.strip() for origin in get_settings().cors_allowed_origins.split(",") if origin.strip()]
@@ -18,6 +20,8 @@ app.include_router(gistda_router)
 app.include_router(flood_impact_router)
 app.include_router(public_flood_impact_router)
 app.include_router(branch_flood_situation_router)
+app.include_router(distribution_centers_router)
+app.include_router(routes_router)
 
 
 @app.get("/health", tags=["health"])
