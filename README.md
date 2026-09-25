@@ -11,6 +11,9 @@ A production-oriented backend foundation for maintaining branch locations and fi
 
 See [docs/architecture.md](docs/architecture.md) for more detail.
 
+The source-separated unified branch view is documented in
+[docs/branch-flood-situation.md](docs/branch-flood-situation.md).
+
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2 (recommended), or Python 3.12+ and PostgreSQL with PostGIS.

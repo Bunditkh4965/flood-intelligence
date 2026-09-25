@@ -18,7 +18,9 @@ class ImpactPage:
 # The LATERAL subquery produces at most one flood row per branch.  The geography
 # KNN operator uses ix_gistda_features_geography_gist, while ST_Distance returns
 # an accurate spheroidal distance in metres.
-_IMPACT_CTE = """
+def impact_cte(branch_predicate: str = "TRUE") -> str:
+    """Build the canonical GISTDA impact query for a selected branch set."""
+    return f"""
 WITH active_flood AS (
     SELECT id, geometry
     FROM gistda_flood_features
@@ -39,6 +41,7 @@ WITH active_flood AS (
         ORDER BY f.geometry::geography <-> b.location
         LIMIT 1
     ) nearest ON TRUE
+    WHERE {branch_predicate}
 ), classified AS (
     SELECT *, CASE
         WHEN inside_flood_polygon THEN 'DIRECT'
@@ -48,6 +51,18 @@ WITH active_flood AS (
     FROM impacts
 )
 """
+
+
+_IMPACT_CTE = impact_cte()
+
+
+def gistda_data_available(db: Session, period: str) -> bool:
+    return bool(db.scalar(text("""
+        SELECT EXISTS (
+            SELECT 1 FROM gistda_flood_features
+            WHERE period = :period AND is_active IS TRUE
+        )
+    """), {"period": period}))
 
 
 def _row(row, period: str) -> dict:
@@ -69,12 +84,7 @@ def calculate_branch_impacts(
     offset: int,
 ) -> ImpactPage:
     parameters = {"period": period, "proximity_km": proximity_km}
-    available = bool(db.scalar(text("""
-        SELECT EXISTS (
-            SELECT 1 FROM gistda_flood_features
-            WHERE period = :period AND is_active IS TRUE
-        )
-    """), {"period": period}))
+    available = gistda_data_available(db, period)
 
     counts = db.execute(text(_IMPACT_CTE + """
         SELECT impact_classification, count(*) AS count
@@ -100,10 +110,7 @@ def calculate_branch_impact(db: Session, store_number: str, period: str, proximi
                               {"store_number": store_number})
     if not branch_exists:
         return None
-    available = bool(db.scalar(text("""
-        SELECT EXISTS (SELECT 1 FROM gistda_flood_features
-                       WHERE period = :period AND is_active IS TRUE)
-    """), {"period": period}))
+    available = gistda_data_available(db, period)
     row = db.execute(text(_IMPACT_CTE + """
         SELECT * FROM classified WHERE store_number = :store_number
     """), {"period": period, "proximity_km": proximity_km, "store_number": store_number}).mappings().one()
