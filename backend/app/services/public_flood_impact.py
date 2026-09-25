@@ -36,7 +36,9 @@ def get_eligible_verification_statuses(db: Session) -> tuple[str, ...]:
 # The lateral query yields at most one eligible observation for each branch.
 # Both operands are geography points: KNN finds the nearest candidate using the
 # GiST index and ST_Distance supplies spheroidal metres for the final distance.
-_PUBLIC_IMPACT_CTE = """
+def public_impact_cte(branch_predicate: str = "TRUE") -> str:
+    """Build the canonical public-report impact query for a branch set."""
+    return f"""
 WITH eligible_reports AS (
     SELECT id, report_code, flood_location, verification_status, reported_at
     FROM flood_reports
@@ -60,6 +62,7 @@ WITH eligible_reports AS (
         ORDER BY r.flood_location <-> b.location, r.id
         LIMIT 1
     ) nearest ON TRUE
+    WHERE {branch_predicate}
 ), classified AS (
     SELECT *, CASE
         WHEN nearest_report_distance_km <= :proximity_km THEN 'PUBLIC_NEARBY'
@@ -68,6 +71,9 @@ WITH eligible_reports AS (
     FROM impacts
 )
 """
+
+
+_PUBLIC_IMPACT_CTE = public_impact_cte()
 
 
 def _row(row) -> dict:
@@ -88,12 +94,8 @@ def _parameters(db: Session, proximity_km: float, lookback_hours: int) -> dict:
     }
 
 
-def calculate_public_branch_impacts(
-    db: Session, proximity_km: float, lookback_hours: int,
-    classification: PublicImpactClassification | None, limit: int, offset: int,
-) -> PublicImpactPage:
-    parameters = _parameters(db, proximity_km, lookback_hours)
-    available = bool(db.scalar(text("""
+def public_data_available(db: Session, parameters: dict) -> bool:
+    return bool(db.scalar(text("""
         SELECT EXISTS (
             SELECT 1 FROM flood_reports
             WHERE source = 'PUBLIC' AND status = 'ACTIVE'
@@ -101,6 +103,14 @@ def calculate_public_branch_impacts(
               AND reported_at >= :reported_from
         )
     """), parameters))
+
+
+def calculate_public_branch_impacts(
+    db: Session, proximity_km: float, lookback_hours: int,
+    classification: PublicImpactClassification | None, limit: int, offset: int,
+) -> PublicImpactPage:
+    parameters = _parameters(db, proximity_km, lookback_hours)
+    available = public_data_available(db, parameters)
 
     counts = db.execute(text(_PUBLIC_IMPACT_CTE + """
         SELECT public_impact_classification, count(*) AS count
@@ -135,14 +145,7 @@ def calculate_public_branch_impact(
     if not branch_exists:
         return None
     parameters = _parameters(db, proximity_km, lookback_hours)
-    available = bool(db.scalar(text("""
-        SELECT EXISTS (
-            SELECT 1 FROM flood_reports
-            WHERE source = 'PUBLIC' AND status = 'ACTIVE'
-              AND verification_status = ANY(CAST(:eligible_statuses AS text[]))
-              AND reported_at >= :reported_from
-        )
-    """), parameters))
+    available = public_data_available(db, parameters)
     row = db.execute(text(_PUBLIC_IMPACT_CTE + """
         SELECT * FROM classified WHERE store_number = :store_number
     """), {**parameters, "store_number": store_number}).mappings().one()
