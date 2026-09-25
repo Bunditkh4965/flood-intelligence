@@ -34,10 +34,16 @@ def _normalize_result(result: RouteProviderResult) -> RouteProviderResult:
     if not result.provider_name.strip():
         raise ValueError("Routing provider name is required")
     geometry_type = result.route_geometry.get("type") if isinstance(result.route_geometry, dict) else None
-    if geometry_type not in {"LineString", "MultiLineString"}:
-        raise ValueError("Routing provider must return a GeoJSON LineString or MultiLineString")
-    if not result.route_geometry.get("coordinates"):
+    if geometry_type != "LineString":
+        raise ValueError("Routing provider must return a GeoJSON LineString")
+    coordinates = result.route_geometry.get("coordinates")
+    if not isinstance(coordinates, list) or len(coordinates) < 2:
         raise ValueError("Routing provider returned empty route geometry")
+    for coordinate in coordinates:
+        if (not isinstance(coordinate, list) or len(coordinate) != 2
+                or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in coordinate)
+                or not -180 <= coordinate[0] <= 180 or not -90 <= coordinate[1] <= 90):
+            raise ValueError("Routing provider returned invalid route coordinates")
     return result
 
 

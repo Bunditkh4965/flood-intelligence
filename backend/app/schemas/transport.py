@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class DcStatus(StrEnum):
@@ -44,7 +44,7 @@ class VehicleProfile(StrEnum):
 
 class RouteEndpoint(BaseModel):
     type: LocationType
-    code: str = Field(min_length=1, max_length=64)
+    code: str = Field(min_length=1, max_length=64, validation_alias=AliasChoices("code", "id"))
 
 
 class RouteCalculateRequest(BaseModel):

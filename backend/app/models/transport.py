@@ -33,7 +33,7 @@ class TransportRoute(Base):
     __table_args__ = (
         CheckConstraint("origin_type IN ('DC', 'BRANCH')", name="ck_transport_routes_origin_type"),
         CheckConstraint("destination_type IN ('DC', 'BRANCH')", name="ck_transport_routes_destination_type"),
-        CheckConstraint("GeometryType(route_geometry) IN ('LINESTRING', 'MULTILINESTRING')", name="ck_transport_routes_linear_geometry"),
+        CheckConstraint("GeometryType(route_geometry) = 'LINESTRING'", name="ck_transport_routes_linear_geometry"),
         CheckConstraint("ST_SRID(route_geometry) = 4326", name="ck_transport_routes_geometry_srid"),
         CheckConstraint("distance_km >= 0", name="ck_transport_routes_distance"),
         CheckConstraint("duration_minutes >= 0", name="ck_transport_routes_duration"),
@@ -50,7 +50,7 @@ class TransportRoute(Base):
     vehicle_profile: Mapped[str] = mapped_column(String(16), nullable=False)
     distance_km: Mapped[float] = mapped_column(Float, nullable=False)
     duration_minutes: Mapped[float] = mapped_column(Float, nullable=False)
-    route_geometry: Mapped[object] = mapped_column(Geometry("GEOMETRY", srid=4326, spatial_index=False), nullable=False)
+    route_geometry: Mapped[object] = mapped_column(Geometry("LINESTRING", srid=4326, spatial_index=False), nullable=False)
     routing_provider: Mapped[str] = mapped_column(String(100), nullable=False)
     provider_route_id: Mapped[str | None] = mapped_column(String(255))
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
