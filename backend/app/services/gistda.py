@@ -141,7 +141,23 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
         else:
             payload = client.fetch_flood_features(normalized)
         parsed, rejected, received = parse_collection(payload)
-        if received == 0 or not parsed:
+        if received == 0:
+            # An empty collection is an authoritative "no current data"
+            # response, but not a replacement snapshot. Keep the last known
+            # good features active until a non-empty valid snapshot replaces
+            # them.
+            run.status = "SUCCESS"
+            run.records_received = 0
+            run.records_inserted = 0
+            run.records_updated = 0
+            run.records_unchanged = 0
+            run.records_rejected = 0
+            run.error_message = None
+            run.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(run)
+            return run
+        if not parsed:
             raise ValueError("response contains no usable flood features")
 
         existing = {item.source_hash: item for item in db.scalars(select(GistdaFloodFeature).where(GistdaFloodFeature.period == normalized))}

@@ -116,6 +116,7 @@ class FakeSession:
         self.runs = []
         self.pending = []
         self.rollbacks = 0
+        self.executions = 0
 
     def add(self, value):
         self.pending.append(value)
@@ -141,6 +142,7 @@ class FakeSession:
         return list(self.features)
 
     def execute(self, statement):
+        self.executions += 1
         return None
 
     def get(self, model, identifier):
@@ -167,6 +169,46 @@ def test_each_period_syncs_successfully_and_repeated_sync_is_idempotent(period) 
     assert first.status == "SUCCESS" and first.records_inserted == 1
     assert second.status == "SUCCESS" and second.records_unchanged == 1
     assert len(db.features) == 1
+
+
+def test_empty_collection_is_success_and_preserves_last_known_good_data() -> None:
+    db = FakeSession()
+    existing = GistdaFloodFeature(
+        id=1, period="1DAY", source="GISTDA", source_hash="x" * 64,
+        source_properties={}, synced_at=datetime.now(timezone.utc), is_active=True,
+        geometry="MULTIPOLYGON(((100 13,101 13,101 14,100 13)))",
+    )
+    db.features.append(existing)
+
+    run = sync_gistda_flood(db, "1day", StubClient({
+        "type": "FeatureCollection",
+        "features": [],
+        "numberMatched": 0,
+        "numberReturned": 0,
+    }))
+
+    assert run.status == "SUCCESS"
+    assert (
+        run.records_received,
+        run.records_inserted,
+        run.records_updated,
+        run.records_unchanged,
+        run.records_rejected,
+    ) == (0, 0, 0, 0, 0)
+    assert run.error_message is None
+    assert existing.is_active is True
+    assert db.executions == 0
+
+
+@pytest.mark.parametrize("payload", [
+    {"type": "FeatureCollection", "features": {}},
+    {"type": "Feature", "features": []},
+    {},
+])
+def test_malformed_collection_sync_still_fails(payload) -> None:
+    run = sync_gistda_flood(FakeSession(), "1day", StubClient(payload))
+    assert run.status == "FAILED"
+    assert run.error_message == "ValueError: response is not a GeoJSON FeatureCollection"
 
 
 def test_partial_sync_records_rejection() -> None:
