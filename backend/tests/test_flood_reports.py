@@ -22,10 +22,11 @@ def valid_payload(**overrides):
 
 
 def test_valid_public_report_payload_keeps_map_and_gps_coordinates_separate() -> None:
-    report = FloodReportCreate(**valid_payload())
+    report = FloodReportCreate(**valid_payload(water_level_cm=30.5))
     assert report.flood_latitude == 14.123456
     assert report.reporter_latitude == 14.124
     assert report.reporter_gps_accuracy_m == 10
+    assert report.water_level_cm == 30.5
 
 
 @pytest.mark.parametrize("field,value", [
@@ -59,7 +60,7 @@ def test_public_response_hides_internal_and_reporter_identity() -> None:
     report = FloodReport(
         id=99, report_code="FR-20260924-00001", flood_latitude=14.1, flood_longitude=100.5,
         reporter_latitude=14.1001, reporter_longitude=100.5001, reporter_gps_accuracy_m=8,
-        water_level_cm=20, road_status="UNKNOWN", vehicle_4w_status="UNKNOWN", vehicle_6w_status="UNKNOWN",
+        water_level_cm=20.5, road_status="UNKNOWN", vehicle_4w_status="UNKNOWN", vehicle_6w_status="UNKNOWN",
         vehicle_10w_status="UNKNOWN", has_photo=True, verification_status="VERIFIED",
         verification_reason="GPS_WITHIN_RADIUS_AND_PHOTO", source="PUBLIC", status="ACTIVE",
         reported_at=datetime(2026, 9, 24, tzinfo=timezone.utc), flood_location="SRID=4326;POINT(100.5 14.1)",
@@ -67,6 +68,7 @@ def test_public_response_hides_internal_and_reporter_identity() -> None:
     response = serialize_report(report).model_dump()
     assert response["report_code"] == "FR-20260924-00001"
     assert response["flood_location"] == {"latitude": 14.1, "longitude": 100.5}
+    assert response["water_level_cm"] == 20.5
     assert "id" not in response and "reporter_id" not in response
 
 
