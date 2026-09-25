@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,9 @@ class Settings(BaseSettings):
     routing_provider: str = ""
     valhalla_url: str = ""
     valhalla_timeout_seconds: float = 10.0
+    public_route_impact_radius_meters: float = Field(default=300.0, gt=0)
+    route_impact_public_lookback_hours: int = Field(default=24, gt=0)
+    route_impact_gistda_period: str = Field(default="3DAYS", pattern="^(1DAY|3DAYS|7DAYS|30DAYS)$")
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
