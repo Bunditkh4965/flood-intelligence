@@ -47,6 +47,45 @@ services:
       - ./frontend:/app
     command: sh -c "npm install && npm run dev"
 
+  # Runtime-only Valhalla service. Thailand data is deliberately prepared by
+  # the profile-gated valhalla-bootstrap service, never by a normal `up`.
+  valhalla:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:3.5.1
+    environment:
+      tile_urls: ""
+      use_tiles_ignore_pbf: "True"
+      force_rebuild: "False"
+      server_threads: ${VALHALLA_SERVER_THREADS:-2}
+    ports:
+      - "${VALHALLA_PORT:-8002}:8002"
+    volumes:
+      - valhalla_data:/custom_files
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:8002/status >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # Explicit one-shot tile builder. It is excluded from normal Compose startup
+  # by its profile and shares only the dedicated Valhalla volume.
+  valhalla-bootstrap:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:3.5.1
+    profiles: ["tools"]
+    environment:
+      tile_urls: ${VALHALLA_THAILAND_PBF_URL:-https://download.geofabrik.de/asia/thailand-latest.osm.pbf}
+      use_tiles_ignore_pbf: "False"
+      force_rebuild: ${VALHALLA_FORCE_REBUILD:-False}
+      build_admins: "True"
+      build_time_zones: "True"
+      build_tar: "True"
+      serve_tiles: "False"
+      server_threads: ${VALHALLA_BUILD_THREADS:-2}
+    volumes:
+      - valhalla_data:/custom_files
+
 volumes:
   postgres_data:
   flood_photos:
+  valhalla_data:
