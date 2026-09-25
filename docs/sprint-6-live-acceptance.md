@@ -29,6 +29,8 @@ docker compose logs --tail 100 web
 
 At **1440×900**, **768×1024**, and **390×844**, confirm KPI totals match `$s.summary`; toggle all layers and filters; search `10241`; select it and confirm map focus plus factual, source-separated detail. Confirm polygon/report counts match the API and `TEST-DC-01` is absent. Select a real DC, branch, and vehicle and click **คำนวณเส้นทาง**. In DevTools Network confirm the calculate POST is followed by the flood-impact GET. Confirm the map line exactly matches the response `route_geometry` (not a straight line), and distance, duration, provider, calculated time, classification, source status, and separate evidence are shown. Open **รายงานน้ำท่วม** and complete the existing flow.
 
+Leave `/operations` open for at least five minutes with Chrome DevTools Network open. There should be exactly three branch-situation page requests for the accepted 2,574-branch dataset (offsets `0`, `1000`, and `2000`) per refresh—not a continuous request stream. Repeatedly pan/zoom, change situation filters, toggle GISTDA/public layers, and select different branches. Confirm the page remains responsive, memory does not continuously grow, and Chrome does not display an Out of Memory error.
+
 ```powershell
 $routeId = "<route_id-from-network-response>"
 Invoke-RestMethod "$api/api/v1/routes/$routeId/flood-impact" | ConvertTo-Json -Depth 10

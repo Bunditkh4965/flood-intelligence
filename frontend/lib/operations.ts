@@ -34,3 +34,17 @@ export function matchesSearch(query:string, item:{store_number?:string;store_nam
   const q=query.trim().toLocaleLowerCase("th");
   return !q || Object.values(item).some(value => typeof value === "string" && value.toLocaleLowerCase("th").includes(q));
 }
+
+export interface SituationPage { summary:Summary; items:BranchSituation[] }
+export async function loadAllBranchSituations(fetchPage:(offset:number)=>Promise<SituationPage>) {
+  const first = await fetchPage(0);
+  const items = [...first.items];
+  let offset = first.items.length;
+  while (first.items.length === 1000 && items.length === offset) {
+    const page = await fetchPage(offset);
+    items.push(...page.items);
+    if (page.items.length < 1000) break;
+    offset += page.items.length;
+  }
+  return {summary:first.summary,items};
+}
