@@ -11,6 +11,11 @@ A production-oriented backend foundation for maintaining branch locations and fi
 
 See [docs/architecture.md](docs/architecture.md) for more detail.
 
+The Sprint 5A distribution-center master, provider-neutral route contract, safe
+unconfigured-provider behavior, and strict road-route geometry semantics are
+documented in [docs/transport-routing.md](docs/transport-routing.md). Sprint 5A
+does not yet calculate flood impact on transport routes.
+
 The source-separated unified branch view is documented in
 [docs/branch-flood-situation.md](docs/branch-flood-situation.md).
 
