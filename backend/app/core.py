@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     photo_storage_directory: str = "./var/flood-report-photos"
     photo_max_bytes: int = 8 * 1024 * 1024
     cors_allowed_origins: str = "http://localhost:3000"
+    routing_provider: str = ""
+    valhalla_url: str = ""
+    valhalla_timeout_seconds: float = 10.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

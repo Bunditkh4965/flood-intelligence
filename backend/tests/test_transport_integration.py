@@ -54,10 +54,10 @@ def test_transport_migration_spatial_types_indexes_and_provenance() -> None:
         """))
         row = connection.execute(text("""
             SELECT GeometryType(route_geometry), ST_SRID(route_geometry), routing_provider,
-                   provider_route_id
+                   provider_route_id, ST_NPoints(route_geometry)
             FROM transport_routes WHERE route_id = 'route-test'
         """)).one()
-        assert row == ("LINESTRING", 4326, "integration-test-provider", "external-1")
+        assert row == ("LINESTRING", 4326, "integration-test-provider", "external-1", 2)
 
         indexes = {row[0] for row in connection.execute(text("""
             SELECT indexname FROM pg_indexes

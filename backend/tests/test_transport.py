@@ -73,6 +73,15 @@ def test_vehicle_profile_validation() -> None:
         RouteCalculateRequest.model_validate(_request("CAR"))
 
 
+def test_route_endpoint_accepts_public_id_spelling() -> None:
+    payload = _request()
+    payload["origin"]["id"] = payload["origin"].pop("code")
+    payload["destination"]["id"] = payload["destination"].pop("code")
+    request = RouteCalculateRequest.model_validate(payload)
+    assert request.origin.code == "DC-01"
+    assert request.destination.code == "1001"
+
+
 def test_no_provider_never_returns_geometry() -> None:
     with pytest.raises(RoutingProviderNotConfigured):
         NoRoutingProvider().calculate_route((100.5, 13.75), (100.6, 13.8), "6W")
@@ -91,6 +100,35 @@ def test_route_provider_invocation_normalization_and_provenance(monkeypatch) -> 
     persisted = db.add.call_args.args[0]
     assert (response.distance_km, response.duration_minutes, response.route_geometry) == (12.25, 31.5, geometry)
     assert (persisted.routing_provider, persisted.provider_route_id) == ("test-engine", "provider-42")
+
+
+def test_provider_failure_does_not_persist(monkeypatch) -> None:
+    from app.routing.provider import RoutingProviderConnectionError
+    from app.services import routes
+    monkeypatch.setattr(routes, "get_distribution_center", lambda db, code: _dc())
+    monkeypatch.setattr(routes, "get_branch_by_store_number", lambda db, code: _branch())
+    provider = Mock()
+    provider.calculate_route.side_effect = RoutingProviderConnectionError("down")
+    db = Mock()
+    with pytest.raises(RoutingProviderConnectionError):
+        routes.calculate_and_store_route(db, RouteCalculateRequest.model_validate(_request()), provider)
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("coordinates", [[], [[100.5, 13.75]], [[13.75, 100.5], [13.8, 100.6]]])
+def test_route_rejects_invalid_linestring_without_persisting(monkeypatch, coordinates) -> None:
+    from app.services import routes
+    monkeypatch.setattr(routes, "get_distribution_center", lambda db, code: _dc())
+    monkeypatch.setattr(routes, "get_branch_by_store_number", lambda db, code: _branch())
+    provider = Mock()
+    provider.calculate_route.return_value = RouteProviderResult(
+        1, 1, {"type": "LineString", "coordinates": coordinates}, "test"
+    )
+    db = Mock()
+    with pytest.raises(ValueError):
+        routes.calculate_and_store_route(db, RouteCalculateRequest.model_validate(_request()), provider)
+    db.add.assert_not_called()
 
 
 @pytest.mark.parametrize("kind", ["inactive_dc", "unknown_branch", "inactive_branch"])
