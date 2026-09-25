@@ -16,9 +16,11 @@ unconfigured-provider behavior, and strict road-route geometry semantics are
 documented in [docs/transport-routing.md](docs/transport-routing.md). Sprint 5A
 does not yet calculate flood impact on transport routes.
 
-The isolated local Valhalla/Thailand infrastructure proof of concept is
-documented in [docs/valhalla-thailand-poc.md](docs/valhalla-thailand-poc.md).
-It does not change or configure the Sprint 5A routing provider.
+The independently managed, shared Valhalla/Thailand infrastructure proof of
+concept is documented in
+[infrastructure/valhalla/README.md](infrastructure/valhalla/README.md). It does
+not change or configure the Sprint 5A routing provider and is not part of this
+application's Compose lifecycle.
 
 The source-separated unified branch view is documented in
 [docs/branch-flood-situation.md](docs/branch-flood-situation.md).

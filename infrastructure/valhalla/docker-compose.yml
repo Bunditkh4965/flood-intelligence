@@ -1,0 +1,40 @@
+name: shared-valhalla-thailand
+
+services:
+  valhalla:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:3.5.1
+    environment:
+      tile_urls: ""
+      use_tiles_ignore_pbf: "True"
+      force_rebuild: "False"
+      server_threads: ${VALHALLA_SERVER_THREADS:-2}
+    ports:
+      - "${VALHALLA_PORT:-8002}:8002"
+    volumes:
+      - valhalla_thailand_data:/custom_files
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:8002/status >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  valhalla-bootstrap:
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:3.5.1
+    profiles: ["tools"]
+    environment:
+      tile_urls: ${VALHALLA_THAILAND_PBF_URL:-https://download.geofabrik.de/asia/thailand-latest.osm.pbf}
+      use_tiles_ignore_pbf: "False"
+      force_rebuild: ${VALHALLA_FORCE_REBUILD:-False}
+      build_admins: "True"
+      build_time_zones: "True"
+      build_tar: "True"
+      serve_tiles: "False"
+      server_threads: ${VALHALLA_BUILD_THREADS:-2}
+    volumes:
+      - valhalla_thailand_data:/custom_files
+
+volumes:
+  valhalla_thailand_data:
+    name: shared_valhalla_thailand_data

@@ -1,22 +1,18 @@
 [CmdletBinding()]
-param(
-    [switch]$Rebuild
-)
+param([switch]$Rebuild)
 
 $ErrorActionPreference = "Stop"
-$repositoryRoot = Split-Path -Parent $PSScriptRoot
-Push-Location $repositoryRoot
+Push-Location $PSScriptRoot
 try {
     if ($Rebuild) {
         $env:VALHALLA_FORCE_REBUILD = "True"
     }
-
-    Write-Host "Bootstrapping Thailand OSM data in the dedicated valhalla_data volume..."
+    Write-Host "Bootstrapping Thailand OSM data in shared_valhalla_thailand_data..."
     docker compose --profile tools run --rm valhalla-bootstrap
     if ($LASTEXITCODE -ne 0) {
         throw "Valhalla bootstrap failed with exit code $LASTEXITCODE."
     }
-    Write-Host "Tile build finished. Start the engine with: docker compose up -d valhalla"
+    Write-Host "Tile build finished. Start the shared service with: docker compose up -d valhalla"
 }
 finally {
     if ($Rebuild) {

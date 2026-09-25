@@ -11,4 +11,5 @@ backend/var/
 # Optional bind-mount location for routing experiments. The Compose POC uses a
 # named volume, but PBF extracts and generated Valhalla tiles must never be committed.
 data/valhalla/
+infrastructure/valhalla/data/
 *.osm.pbf
