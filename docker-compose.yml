@@ -48,8 +48,11 @@ services:
       - "${WEB_PORT:-3000}:3000"
     volumes:
       - ./frontend:/app
+      # Keep Linux-native optional dependencies out of the Windows bind mount.
+      - frontend_node_modules:/app/node_modules
     command: sh -c "npm install && npm run dev"
 
 volumes:
   postgres_data:
   flood_photos:
+  frontend_node_modules:
