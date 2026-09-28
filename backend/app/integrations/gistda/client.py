@@ -224,6 +224,21 @@ class GistdaClient:
             return href
         return urlunsplit((parts.scheme, parts.netloc, match.group("path"), match.group("query"), ""))
 
+    @staticmethod
+    def _normalize_feature_next(href: str) -> str:
+        """Repair GISTDA's verified `/items&...&offset=...` defect only."""
+        parts = urlsplit(href)
+        if parts.query or parts.fragment:
+            return href
+        match = re.fullmatch(r"(?P<path>.*(?:^|/)items)&(?P<query>[^?#]+)", parts.path)
+        if match is None:
+            return href
+        parameters = parse_qsl(match.group("query"), keep_blank_values=True)
+        keys = {key for key, _ in parameters}
+        if not parameters or not {"collectionCreatedBy", "offset"}.issubset(keys):
+            return href
+        return urlunsplit((parts.scheme, parts.netloc, match.group("path"), match.group("query"), ""))
+
     def _stac_collection(self, period: str) -> tuple[dict[str, Any], httpx.URL]:
         listing, listing_url = self._get_json(
             f"collections?limit={COLLECTION_PAGE_SIZE}&offset=0", period,
@@ -300,7 +315,10 @@ class GistdaClient:
                         f"({total_returned} of {matched})"
                     )
                 return
-            payload, url = self._get_json(url.join(next_href), normalized)
+            normalized_next = self._normalize_feature_next(next_href)
+            if normalized_next != next_href:
+                logger.warning("Repaired malformed GISTDA GeoJSON feature next link")
+            payload, url = self._get_json(url.join(normalized_next), normalized)
         raise GistdaAPIError(f"GISTDA pagination exceeded {MAX_GEOJSON_PAGES} pages")
 
     def fetch_flood_features(self, period: str) -> dict[str, Any]:

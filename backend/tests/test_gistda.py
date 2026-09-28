@@ -134,6 +134,60 @@ def test_verified_gistda_feature_collection_shape_follows_offset_next(caplog) ->
     assert "page=2 numberReturned=1 next=False" in caplog.text
 
 
+def test_live_malformed_feature_next_is_repaired_and_all_features_accumulate() -> None:
+    requested: list[str] = []
+    first_ten = [feature(identifier=f"feature-{index}") for index in range(10)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.params.get("offset") == "10":
+            return httpx.Response(200, json={
+                "type": "FeatureCollection", "numberMatched": 11,
+                "numberReturned": 1, "features": [feature(identifier="feature-10")],
+                "links": [],
+            })
+        return httpx.Response(200, json={
+            "type": "FeatureCollection", "numberMatched": 11,
+            "numberReturned": 10, "features": first_ten,
+            "links": [{
+                "rel": "next",
+                "href": "/items&collectionCreatedBy=test-id&offset=10",
+            }],
+        })
+
+    with GistdaClient(settings(), httpx.MockTransport(handler)) as client:
+        result = client.fetch_flood_features("7days")
+
+    assert len(result["features"]) == 11
+    assert requested[-1] == "https://example.test/items?collectionCreatedBy=test-id&offset=10"
+
+
+@pytest.mark.parametrize("href", [
+    "/items?collectionCreatedBy=test-id&offset=10",
+    "https://example.test/items?collectionCreatedBy=test-id&offset=10",
+    "/unrelated&collectionCreatedBy=test-id&offset=10",
+    "/items&offset=10",
+    "/items&collectionCreatedBy=test-id",
+    "/items&collectionCreatedBy=test-id&offset=10#fragment",
+])
+def test_feature_next_repair_leaves_valid_and_unrelated_urls_unchanged(href) -> None:
+    assert GistdaClient._normalize_feature_next(href) == href
+
+
+@pytest.mark.parametrize(("href", "expected"), [
+    (
+        "/items&collectionCreatedBy=test-id&offset=10",
+        "/items?collectionCreatedBy=test-id&offset=10",
+    ),
+    (
+        "https://example.test/stac/items&collectionCreatedBy=test-id&limit=10&offset=20",
+        "https://example.test/stac/items?collectionCreatedBy=test-id&limit=10&offset=20",
+    ),
+])
+def test_feature_next_repair_supports_relative_and_absolute_links(href, expected) -> None:
+    assert GistdaClient._normalize_feature_next(href) == expected
+
+
 def test_incomplete_number_matched_without_recognizable_next_fails() -> None:
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
         "type": "FeatureCollection", "numberMatched": 57_953,
