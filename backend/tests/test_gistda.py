@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app.api import gistda as api
 from app.core import Settings
@@ -617,6 +618,7 @@ class FakeSession:
         self.pending = []
         self.rollbacks = 0
         self.executions = 0
+        self.statements = []
 
     def add(self, value):
         self.pending.append(value)
@@ -643,7 +645,16 @@ class FakeSession:
 
     def execute(self, statement):
         self.executions += 1
+        self.statements.append(statement)
         return None
+
+    def flush(self):
+        self.flushes = getattr(self, "flushes", 0) + 1
+        features = [value for value in self.pending if isinstance(value, GistdaFloodFeature)]
+        for value in features:
+            value.id = len(self.features) + 1
+            self.features.append(value)
+            self.pending.remove(value)
 
     def get(self, model, identifier):
         return next(item for item in self.runs if item.id == identifier)
@@ -705,7 +716,7 @@ def test_empty_collection_is_success_and_preserves_last_known_good_data() -> Non
     ) == (0, 0, 0, 0, 0)
     assert run.error_message is None
     assert existing.is_active is True
-    assert db.executions == 0
+    assert db.executions == 1  # stale RUNNING-run reconciliation only
 
 
 @pytest.mark.parametrize("payload", [
@@ -778,6 +789,52 @@ def test_sync_counts_every_feature_across_pages() -> None:
     assert len(db.features) == 2
 
 
+def test_large_snapshot_flushes_in_bounded_batches_and_avoids_hash_not_in() -> None:
+    db = FakeSession()
+    items = [feature(identifier=f"large-{index}") for index in range(2_001)]
+
+    run = sync_gistda_flood(db, "7days", PagedStubClient([
+        {"type": "FeatureCollection", "features": items[:1_000]},
+        {"type": "FeatureCollection", "features": items[1_000:2_000]},
+        {"type": "FeatureCollection", "features": items[2_000:]},
+    ]))
+
+    assert run.status == "SUCCESS"
+    assert run.records_received == 2_001
+    assert run.records_inserted == 2_001
+    assert db.flushes == 2
+    assert len(db.features) == 2_001
+    retirement_sql = str(db.statements[-1])
+    assert "synced_at" in retirement_sql
+    assert "source_hash NOT IN" not in retirement_sql
+
+
+def test_database_failure_records_safe_stage_and_sqlstate(caplog) -> None:
+    class DatabaseFailureSession(FakeSession):
+        def scalars(self, statement):
+            class DriverFailure(Exception):
+                sqlstate = "54000"
+
+            raise OperationalError("SELECT sensitive", {"password": "do-not-log"}, DriverFailure())
+
+    db = DatabaseFailureSession()
+    with caplog.at_level(logging.ERROR):
+        run = sync_gistda_flood(
+            db, "7days", StubClient({"type": "FeatureCollection", "features": [feature()]}),
+        )
+
+    assert run.status == "FAILED"
+    assert run.records_received == 1
+    assert run.error_message == (
+        "OperationalError: database operation failed during loading existing features "
+        "(SQLSTATE 54000)"
+    )
+    assert "stage=loading existing features" in caplog.text
+    assert "sqlstate=54000" in caplog.text
+    assert "do-not-log" not in caplog.text
+    assert "SELECT sensitive" not in caplog.text
+
+
 def test_later_page_failure_marks_run_failed_without_reconciliation() -> None:
     class FailingPagedClient:
         def iter_flood_feature_pages(self, period):
@@ -794,5 +851,5 @@ def test_later_page_failure_marks_run_failed_without_reconciliation() -> None:
     run = sync_gistda_flood(db, "7days", FailingPagedClient())
     assert run.status == "FAILED"
     assert existing.is_active is True
-    assert db.executions == 0
+    assert db.executions == 1  # stale RUNNING-run reconciliation only
     assert len(db.features) == 1

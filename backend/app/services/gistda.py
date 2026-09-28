@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session, load_only
 
 from app.integrations.gistda.client import GistdaAPIError, GistdaClient, GistdaConfigurationError
 from app.models.gistda import GistdaFloodFeature, GistdaSyncRun, PERIODS
+
+logger = logging.getLogger(__name__)
+UPSERT_FLUSH_BATCH_SIZE = 1_000
+STALE_SYNC_RUN_AFTER = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -131,10 +137,21 @@ def parse_collection(payload: dict[str, Any]) -> tuple[list[ParsedFeature], list
 def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = None) -> GistdaSyncRun:
     normalized = normalize_period(period)
     now = datetime.now(timezone.utc)
+    db.execute(update(GistdaSyncRun).where(
+        GistdaSyncRun.period == normalized,
+        GistdaSyncRun.status == "RUNNING",
+        GistdaSyncRun.started_at < now - STALE_SYNC_RUN_AFTER,
+    ).values(
+        status="FAILED", finished_at=now,
+        error_message="RuntimeError: abandoned RUNNING sync superseded by a newer run",
+    ))
     run = GistdaSyncRun(period=normalized, started_at=now, status="RUNNING")
     db.add(run)
     db.commit()
     run_id = run.id
+    stage = "fetching and parsing"
+    received = 0
+    rejected: list[Rejection] = []
     try:
         def collect_pages(source: GistdaClient) -> tuple[list[ParsedFeature], list[Rejection], int]:
             iterator = getattr(source, "iter_flood_feature_pages", None)
@@ -185,11 +202,19 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
         if not parsed:
             raise ValueError("response contains no usable flood features")
 
-        existing = {item.source_hash: item for item in db.scalars(select(GistdaFloodFeature).where(GistdaFloodFeature.period == normalized))}
-        active_hashes: set[str] = set()
+        stage = "loading existing features"
+        existing = {item.source_hash: item for item in db.scalars(
+            select(GistdaFloodFeature).options(load_only(
+                GistdaFloodFeature.source_hash,
+                GistdaFloodFeature.is_active,
+                GistdaFloodFeature.source_properties,
+                GistdaFloodFeature.source_observed_at,
+                GistdaFloodFeature.source_updated_at,
+            )).where(GistdaFloodFeature.period == normalized)
+        )}
         inserted = updated = unchanged = 0
-        for item in parsed:
-            active_hashes.add(item.source_hash)
+        stage = "upserting features"
+        for index, item in enumerate(parsed, start=1):
             row = existing.get(item.source_hash)
             if row is None:
                 db.add(GistdaFloodFeature(
@@ -212,13 +237,16 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
             else:
                 row.synced_at = now
                 unchanged += 1
+            if index % UPSERT_FLUSH_BATCH_SIZE == 0:
+                db.flush()
         # Only a completely valid snapshot can retire missing rows. During a
         # partial import, an old row may correspond to the rejected feature.
         if not rejected:
+            stage = "retiring missing features"
             db.execute(update(GistdaFloodFeature).where(
                 GistdaFloodFeature.period == normalized,
                 GistdaFloodFeature.is_active.is_(True),
-                GistdaFloodFeature.source_hash.not_in(active_hashes),
+                GistdaFloodFeature.synced_at != now,
             ).values(is_active=False, updated_at=now))
         run.status = "PARTIAL" if rejected else "SUCCESS"
         run.records_received = received
@@ -226,17 +254,36 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
         run.records_rejected = len(rejected)
         run.error_message = "; ".join(f"feature {r.index}: {r.reason}" for r in rejected)[:4000] or None
         run.finished_at = datetime.now(timezone.utc)
+        stage = "committing snapshot"
         db.commit()
         db.refresh(run)
         return run
     except Exception as exc:
         db.rollback()
+        if isinstance(exc, DBAPIError):
+            original = exc.orig
+            sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+            logger.error(
+                "GISTDA database failure stage=%s exception=%s dbapi_exception=%s sqlstate=%s",
+                stage, type(exc).__name__, type(original).__name__, sqlstate or "unavailable",
+            )
         failed = db.get(GistdaSyncRun, run_id)
         if failed is None:
             raise RuntimeError(f"GISTDA sync run {run_id} disappeared while recording failure") from exc
         failed.status = "FAILED"
         failed.finished_at = datetime.now(timezone.utc)
-        if isinstance(exc, (GistdaAPIError, GistdaConfigurationError, ValueError)):
+        failed.records_received = received
+        failed.records_rejected = len(rejected)
+        failed.records_inserted = 0
+        failed.records_updated = 0
+        failed.records_unchanged = 0
+        if isinstance(exc, DBAPIError):
+            original = exc.orig
+            sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+            detail = f"database operation failed during {stage}"
+            if sqlstate:
+                detail += f" (SQLSTATE {sqlstate})"
+        elif isinstance(exc, (GistdaAPIError, GistdaConfigurationError, ValueError)):
             detail = str(exc).strip() or "no details supplied"
         else:
             # Unknown exceptions can embed connection strings or credentials.
