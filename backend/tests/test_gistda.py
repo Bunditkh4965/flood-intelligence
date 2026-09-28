@@ -244,6 +244,94 @@ def test_collection_discovery_supports_string_catalog_entries() -> None:
     assert collection == {"id": "flood7days_r2"}
 
 
+def test_collection_listing_follows_relative_next_after_ten_unrelated_scenes() -> None:
+    requested: list[str] = []
+    scenes = [{"id": f"S1A_IW_GRDH_{index:02d}"} for index in range(10)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path.endswith("/collections/flood7days_r2"):
+            return httpx.Response(200, json={
+                "id": "flood7days_r2", "title": "Process Data 7 Days",
+                "links": [{"rel": "items", "href": "items"}],
+            })
+        if request.url.params.get("offset") == "10":
+            return httpx.Response(200, json={
+                "collections": [{
+                    "id": "flood7days_r2", "title": "Process Data 7 Days",
+                    "links": [{"rel": "self", "href": "collections/flood7days_r2"}],
+                }],
+                "links": [],
+            })
+        return httpx.Response(200, json={
+            "collections": scenes,
+            "links": [{"rel": "next", "href": "?offset=10"}],
+        })
+
+    with GistdaClient(
+        settings(stac_url="https://disaster.gistda.or.th/app-api/services/stac/flood/"),
+        httpx.MockTransport(handler),
+    ) as client:
+        collection, _ = client._stac_collection("7DAYS")
+    assert collection["id"] == "flood7days_r2"
+    assert any(url.endswith("collections?offset=10") for url in requested)
+
+
+def test_collection_listing_follows_absolute_next_and_selects_latest_revision() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/collections/flood7days_r3"):
+            return httpx.Response(200, json={"id": "flood7days_r3", "links": []})
+        if request.url.host == "catalog-next.test":
+            return httpx.Response(200, json={
+                "collections": [{"id": "flood7days_r3"}], "links": [],
+            })
+        return httpx.Response(200, json={
+            "collections": [{"id": "flood7days_r2"}],
+            "links": [{"rel": "next", "href": "https://catalog-next.test/page/2"}],
+        })
+
+    with GistdaClient(
+        settings(stac_url="https://disaster.gistda.or.th/app-api/services/stac/flood/"),
+        httpx.MockTransport(handler),
+    ) as client:
+        collection, _ = client._stac_collection("7DAYS")
+    assert collection["id"] == "flood7days_r3"
+
+
+def test_collection_listing_pagination_cycle_is_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "collections": [{"id": "S1A_IW_GRDH_scene"}],
+            "links": [{"rel": "next", "href": str(request.url)}],
+        })
+
+    with GistdaClient(
+        settings(stac_url="https://disaster.gistda.or.th/app-api/services/stac/flood/"),
+        httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(GistdaAPIError, match="collection pagination cycle"):
+            client._stac_collection("7DAYS")
+
+
+def test_paginated_collection_listing_without_period_match_is_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("page") == "2":
+            return httpx.Response(200, json={
+                "collections": [{"id": "S1B_IW_GRDH_later"}], "links": [],
+            })
+        return httpx.Response(200, json={
+            "collections": [{"id": "S1A_IW_GRDH_first"}],
+            "links": [{"rel": "next", "href": "?page=2"}],
+        })
+
+    with GistdaClient(
+        settings(stac_url="https://disaster.gistda.or.th/app-api/services/stac/flood/"),
+        httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(GistdaAPIError, match="0 collections"):
+            client._stac_collection("7DAYS")
+
+
 def test_stac_asset_is_discovered_by_semantics_without_data_key() -> None:
     responses = iter([
         {"type": "Collection", "links": [{"rel": "items", "href": "items"}]},

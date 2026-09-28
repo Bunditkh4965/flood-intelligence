@@ -13,6 +13,7 @@ from app.core import Settings, get_settings
 logger = logging.getLogger(__name__)
 ENDPOINTS = {"1DAY": "1day", "3DAYS": "3days", "7DAYS": "7days", "30DAYS": "30days"}
 MAX_GEOJSON_PAGES = 20_000
+MAX_COLLECTION_PAGES = 2_000
 
 
 class GistdaConfigurationError(RuntimeError):
@@ -166,10 +167,15 @@ class GistdaClient:
     def _select_collection(cls, collections: list[Any], period: str) -> tuple[str, dict[str, Any]]:
         identity_matches: list[tuple[str, dict[str, Any]]] = []
         metadata_matches: list[tuple[str, dict[str, Any]]] = []
+        seen_identities: set[str] = set()
         for raw in collections:
             identity = cls._collection_identity(raw)
             if identity is None:
                 continue
+            canonical_identity = identity.casefold()
+            if canonical_identity in seen_identities:
+                continue
+            seen_identities.add(canonical_identity)
             collection = raw if isinstance(raw, dict) else {"id": identity}
             if cls._matches_period(identity, period):
                 identity_matches.append((identity, collection))
@@ -204,10 +210,37 @@ class GistdaClient:
 
     def _stac_collection(self, period: str) -> tuple[dict[str, Any], httpx.URL]:
         listing, listing_url = self._get_json("collections", period)
-        collections = listing.get("collections")
-        if not isinstance(collections, list):
-            raise GistdaAPIError("GISTDA STAC collections response is malformed")
-        collection_id, collection = self._select_collection(collections, period)
+        all_collections: list[Any] = []
+        visited: set[str] = set()
+        for page_number in range(1, MAX_COLLECTION_PAGES + 1):
+            canonical_url = str(listing_url)
+            if canonical_url in visited:
+                raise GistdaAPIError("GISTDA STAC collection pagination cycle detected")
+            visited.add(canonical_url)
+            collections = listing.get("collections")
+            if not isinstance(collections, list):
+                raise GistdaAPIError("GISTDA STAC collections response is malformed")
+            all_collections.extend(collections)
+            next_href = self._link(listing, "next")
+            logger.info(
+                "GISTDA STAC collection page=%d returned=%d next=%s",
+                page_number, len(collections), next_href is not None,
+            )
+            if next_href is None:
+                matched = listing.get("numberMatched")
+                if isinstance(matched, int) and not isinstance(matched, bool) and matched > len(all_collections):
+                    raise GistdaAPIError(
+                        "GISTDA STAC collection pagination ended before numberMatched was reached "
+                        f"({len(all_collections)} of {matched})"
+                    )
+                break
+            listing, listing_url = self._get_json(listing_url.join(next_href), period)
+        else:
+            raise GistdaAPIError(
+                f"GISTDA STAC collection pagination exceeded {MAX_COLLECTION_PAGES} pages"
+            )
+
+        collection_id, collection = self._select_collection(all_collections, period)
         logger.info("Discovered GISTDA STAC collection id=%s for %s", collection_id, period)
         self_href = self._link(collection, "self")
         collection_url = (
