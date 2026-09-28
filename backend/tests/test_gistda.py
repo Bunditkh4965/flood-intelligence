@@ -78,7 +78,8 @@ def test_stac_discovery_and_relative_and_absolute_geojson_pagination() -> None:
                     }},
                 }],
             })
-        if request.url.path == "/stac/assets/current" and request.url.query == b"":
+        if request.url.path == "/stac/assets/current" and request.url.params.get("offset") == "0":
+            assert request.url.params.get("limit") == "1000"
             return httpx.Response(200, json={
                 "type": "FeatureCollection", "features": [feature(identifier="p1")],
                 "links": [{"rel": "next", "href": "?offset=10"}],
@@ -96,8 +97,8 @@ def test_stac_discovery_and_relative_and_absolute_geojson_pagination() -> None:
         result = client.fetch_flood_features("7days")
     assert [item["id"] for item in result["features"]] == ["p1", "p2"]
     assert requested[-2:] == [
-        "https://example.test/stac/assets/current?offset=10",
-        "https://example.test/final",
+        "https://example.test/stac/assets/current?offset=10&limit=1000",
+        "https://example.test/final?limit=1000",
     ]
 
 
@@ -129,7 +130,8 @@ def test_verified_gistda_feature_collection_shape_follows_offset_next(caplog) ->
             assert len(next(pages)["features"]) == 10
             assert len(next(pages)["features"]) == 1
             pages.close()
-    assert requests[-1].endswith("offset=10")
+    assert httpx.URL(requests[-1]).params.get("offset") == "10"
+    assert httpx.URL(requests[-1]).params.get("limit") == "1000"
     assert "page=1 numberReturned=10 next=True" in caplog.text
     assert "page=2 numberReturned=1 next=False" in caplog.text
 
@@ -159,7 +161,64 @@ def test_live_malformed_feature_next_is_repaired_and_all_features_accumulate() -
         result = client.fetch_flood_features("7days")
 
     assert len(result["features"]) == 11
-    assert requested[-1] == "https://example.test/items?collectionCreatedBy=test-id&offset=10"
+    assert requested[-1] == (
+        "https://example.test/items?collectionCreatedBy=test-id&offset=10&limit=1000"
+    )
+
+
+def test_semantic_asset_requests_large_initial_page_and_accumulates_next_page() -> None:
+    requested: list[httpx.URL] = []
+    first_page = [feature(identifier=f"feature-{index}") for index in range(1_000)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url)
+        if request.url.path == "/api/features/flood/7days":
+            return httpx.Response(200, json={
+                "type": "Feature",
+                "assets": {"data": {
+                    "href": "/items?collectionCreatedBy=test-id",
+                    "type": "application/geo+json", "roles": ["Features"],
+                }},
+            })
+        if request.url.params.get("offset") == "0":
+            return httpx.Response(200, json={
+                "type": "FeatureCollection", "numberMatched": 1_001,
+                "numberReturned": 1_000, "features": first_page,
+                "links": [{
+                    "rel": "next",
+                    "href": "/items&collectionCreatedBy=test-id&offset=1000",
+                }],
+            })
+        return httpx.Response(200, json={
+            "type": "FeatureCollection", "numberMatched": 1_001,
+            "numberReturned": 1, "features": [feature(identifier="feature-1000")],
+            "links": [],
+        })
+
+    with GistdaClient(settings(), httpx.MockTransport(handler)) as client:
+        result = client.fetch_flood_features("7days")
+
+    assert len(result["features"]) == 1_001
+    assert dict(requested[1].params) == {
+        "collectionCreatedBy": "test-id", "limit": "1000", "offset": "0",
+    }
+    assert dict(requested[2].params) == {
+        "collectionCreatedBy": "test-id", "offset": "1000", "limit": "1000",
+    }
+
+
+def test_feature_next_keeps_server_offset_but_enforces_large_page_size() -> None:
+    result = GistdaClient._feature_page_url(
+        "https://example.test/items?collectionCreatedBy=test-id&offset=1000", initial=False,
+    )
+    assert result.endswith("collectionCreatedBy=test-id&offset=1000&limit=1000")
+
+
+def test_default_and_overridden_gistda_connect_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("GISTDA_CONNECT_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).gistda_connect_timeout_seconds == 30.0
+    monkeypatch.setenv("GISTDA_CONNECT_TIMEOUT_SECONDS", "45")
+    assert Settings(_env_file=None).gistda_connect_timeout_seconds == 45.0
 
 
 @pytest.mark.parametrize("href", [

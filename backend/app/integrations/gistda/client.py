@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Iterator
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -15,6 +15,7 @@ ENDPOINTS = {"1DAY": "1day", "3DAYS": "3days", "7DAYS": "7days", "30DAYS": "30da
 MAX_GEOJSON_PAGES = 20_000
 MAX_COLLECTION_PAGES = 2_000
 COLLECTION_PAGE_SIZE = 1_000
+FEATURE_PAGE_SIZE = 1_000
 
 
 class GistdaConfigurationError(RuntimeError):
@@ -119,6 +120,18 @@ class GistdaClient:
         )
         return matches[0]
 
+    @staticmethod
+    def _feature_page_url(href: str | httpx.URL, *, initial: bool) -> str:
+        """Apply the production feature page size without inventing offsets."""
+        parts = urlsplit(str(href))
+        parameters = parse_qsl(parts.query, keep_blank_values=True)
+        parameters = [(key, value) for key, value in parameters if key != "limit"]
+        parameters.append(("limit", str(FEATURE_PAGE_SIZE)))
+        if initial:
+            parameters = [(key, value) for key, value in parameters if key != "offset"]
+            parameters.append(("offset", "0"))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(parameters), parts.fragment))
+
     def _discover_geojson(self, payload: dict[str, Any], url: httpx.URL,
                           period: str) -> tuple[dict[str, Any], httpx.URL]:
         # The compatibility endpoint may already resolve to the GeoJSON asset.
@@ -128,9 +141,10 @@ class GistdaClient:
             if not stac_items:
                 return payload, url
             asset_url = url.join(self._feature_asset(stac_items[0]))
-            return self._get_json(asset_url, period)
+            return self._get_json(self._feature_page_url(asset_url, initial=True), period)
         if payload.get("type") == "Feature" and "assets" in payload:
-            return self._get_json(url.join(self._feature_asset(payload)), period)
+            asset_url = url.join(self._feature_asset(payload))
+            return self._get_json(self._feature_page_url(asset_url, initial=True), period)
 
         items_href = self._link(payload, "items")
         if items_href is None:
@@ -318,7 +332,10 @@ class GistdaClient:
             normalized_next = self._normalize_feature_next(next_href)
             if normalized_next != next_href:
                 logger.warning("Repaired malformed GISTDA GeoJSON feature next link")
-            payload, url = self._get_json(url.join(normalized_next), normalized)
+            next_url = url.join(normalized_next)
+            payload, url = self._get_json(
+                self._feature_page_url(next_url, initial=False), normalized,
+            )
         raise GistdaAPIError(f"GISTDA pagination exceeded {MAX_GEOJSON_PAGES} pages")
 
     def fetch_flood_features(self, period: str) -> dict[str, Any]:
