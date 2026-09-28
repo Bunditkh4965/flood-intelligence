@@ -1,10 +1,12 @@
 import argparse
+import logging
 
 from app.db.session import SessionLocal
 from app.services.gistda import sync_gistda_flood
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Synchronize official GISTDA flood polygons")
     parser.add_argument("--period", required=True, choices=("1day", "3days", "7days", "30days", "all"))
     args = parser.parse_args()
@@ -18,6 +20,8 @@ def main() -> int:
                 f"inserted={run.records_inserted} updated={run.records_updated} "
                 f"unchanged={run.records_unchanged} rejected={run.records_rejected}"
             )
+            if run.status == "FAILED":
+                print(f"  reason: {run.error_message or 'failure reason was not recorded'}")
             failed = failed or run.status == "FAILED"
     return 1 if failed else 0
 

@@ -153,13 +153,14 @@ A response includes a collision-safe daily code such as `FR-20260924-00001`, the
 
 ## Official GISTDA flood areas (Sprint 3B)
 
-GISTDA integration imports the official external geospatial flood-area datasets for `1day`, `3days`, `7days`, and `30days`. It uses the documented Feature/JSON endpoints under `/features/flood/{period}` rather than scraping pages or treating map tiles as analytical data. The current official OpenAPI security definition supplies the credential in the **`API-Key` HTTP header** (it is not a bearer token or query parameter). The client sends that header only to the configured base URL and deliberately excludes request headers and upstream response bodies from errors and logs.
+GISTDA integration imports the official external geospatial flood-area datasets for `1day`, `3days`, `7days`, and `30days`. It discovers the current period collection from the Disaster Platform STAC catalog, follows the collection's `items` link, selects the semantic GeoJSON Features asset, and follows every server-provided `next` link. The older API-gateway Feature endpoint remains an opt-in compatibility fallback. API gateway credentials are never sent to the public STAC host, and request headers and upstream response bodies are excluded from errors and logs.
 
 Configure the runtime outside source control:
 
 ```dotenv
 GISTDA_API_KEY=<provided securely by GISTDA>
 GISTDA_API_BASE_URL=https://api-gateway.gistda.or.th/api/2.0/resources
+GISTDA_STAC_BASE_URL=https://disaster.gistda.or.th/app-api/services/stac/flood/
 ```
 
 `.env` is ignored by Git; `.env.example` contains blank, non-secret placeholders. Never put a real key in a command committed to the repository. Connection and read timeouts default to 5 and 30 seconds respectively, and requests do not retry indefinitely.
