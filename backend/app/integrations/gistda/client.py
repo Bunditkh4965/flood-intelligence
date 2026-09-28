@@ -136,30 +136,83 @@ class GistdaClient:
         items, items_url = self._get_json(url.join(items_href), period)
         return self._discover_geojson(items, items_url, period)
 
+    @staticmethod
+    def _collection_identity(collection: Any) -> str | None:
+        if isinstance(collection, str) and collection.strip():
+            return collection.strip()
+        if not isinstance(collection, dict):
+            return None
+        for key in ("id", "collection", "name"):
+            value = collection.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        links = collection.get("links", [])
+        if isinstance(links, list):
+            for link in links:
+                if not isinstance(link, dict) or link.get("rel") != "self":
+                    continue
+                href = link.get("href")
+                if isinstance(href, str) and "/collections/" in href:
+                    return href.rstrip("/").rsplit("/", 1)[-1]
+        return None
+
+    @staticmethod
+    def _matches_period(value: str, period: str) -> bool:
+        days = ENDPOINTS[period].removesuffix("days").removesuffix("day")
+        normalized = re.sub(r"[^a-z0-9]", "", value.casefold())
+        return re.search(rf"flood0*{re.escape(days)}days?", normalized) is not None
+
+    @classmethod
+    def _select_collection(cls, collections: list[Any], period: str) -> tuple[str, dict[str, Any]]:
+        identity_matches: list[tuple[str, dict[str, Any]]] = []
+        metadata_matches: list[tuple[str, dict[str, Any]]] = []
+        for raw in collections:
+            identity = cls._collection_identity(raw)
+            if identity is None:
+                continue
+            collection = raw if isinstance(raw, dict) else {"id": identity}
+            if cls._matches_period(identity, period):
+                identity_matches.append((identity, collection))
+                continue
+            metadata = " ".join(
+                str(collection.get(key, "")) for key in ("title", "description", "keywords")
+            )
+            if cls._matches_period(metadata, period):
+                metadata_matches.append((identity, collection))
+        candidates = identity_matches or metadata_matches
+        if not candidates:
+            raise GistdaAPIError(f"GISTDA STAC discovery found 0 collections for {period}")
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple revisions of the same period are resolved to the greatest
+        # explicit revision. Without an unambiguous revision, fail closed.
+        versioned: list[tuple[int, str, dict[str, Any]]] = []
+        for identity, collection in candidates:
+            match = re.search(r"(?:^|[_-])(?:r|v|version)[_-]?(\d+)$", identity.casefold())
+            if match:
+                versioned.append((int(match.group(1)), identity, collection))
+        if versioned:
+            highest = max(item[0] for item in versioned)
+            newest = [item for item in versioned if item[0] == highest]
+            if len(newest) == 1:
+                _, identity, collection = newest[0]
+                return identity, collection
+        raise GistdaAPIError(
+            f"GISTDA STAC discovery found {len(candidates)} ambiguous collections for {period}"
+        )
+
     def _stac_collection(self, period: str) -> tuple[dict[str, Any], httpx.URL]:
         listing, listing_url = self._get_json("collections", period)
         collections = listing.get("collections")
         if not isinstance(collections, list):
             raise GistdaAPIError("GISTDA STAC collections response is malformed")
-        token = ENDPOINTS[period]
-        expected_prefix = f"flood{token}"
-        candidates = []
-        for collection in collections:
-            if not isinstance(collection, dict) or not isinstance(collection.get("id"), str):
-                continue
-            normalized_id = re.sub(r"[^a-z0-9]", "", collection["id"].lower())
-            if normalized_id.startswith(expected_prefix):
-                candidates.append(collection)
-        if len(candidates) != 1:
-            raise GistdaAPIError(
-                f"GISTDA STAC discovery found {len(candidates)} collections for {period}"
-            )
-        collection = candidates[0]
-        logger.info("Discovered GISTDA STAC collection id=%s for %s", collection["id"], period)
+        collection_id, collection = self._select_collection(collections, period)
+        logger.info("Discovered GISTDA STAC collection id=%s for %s", collection_id, period)
         self_href = self._link(collection, "self")
         collection_url = (
             listing_url.join(self_href) if self_href
-            else listing_url.join(f"collections/{quote(collection['id'], safe='')}")
+            else listing_url.join(f"collections/{quote(collection_id, safe='')}")
         )
         return self._get_json(collection_url, period)
 

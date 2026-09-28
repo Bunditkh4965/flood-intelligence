@@ -190,6 +190,60 @@ def test_live_stac_entrypoint_discovers_current_collection_and_does_not_send_api
     assert paths[0] == "/app-api/services/stac/flood/collections"
 
 
+@pytest.mark.parametrize(("period", "collection_id"), [
+    ("1DAY", "flood1day_r3"),
+    ("3DAYS", "flood3days_r1"),
+    ("7DAYS", "flood7days_r2"),
+    ("30DAYS", "flood30days_r4"),
+])
+def test_collection_period_families_match_versioned_ids(period, collection_id) -> None:
+    identity, collection = GistdaClient._select_collection([
+        {"id": "unrelated-rainfall"},
+        {"id": collection_id, "title": f"Flood data for {period}"},
+    ], period)
+    assert identity == collection_id
+    assert collection["id"] == collection_id
+
+
+def test_collection_discovery_accepts_realistic_title_and_self_link_metadata() -> None:
+    identity, _ = GistdaClient._select_collection([{
+        "title": "Flood 7 Days",
+        "description": "Current flood extent",
+        "links": [{
+            "rel": "self",
+            "href": "https://disaster.gistda.or.th/app-api/services/stac/flood/collections/flood7days_r2",
+        }],
+    }], "7DAYS")
+    assert identity == "flood7days_r2"
+
+
+def test_collection_discovery_selects_highest_explicit_revision() -> None:
+    identity, _ = GistdaClient._select_collection([
+        {"id": "flood7days_r1"},
+        {"id": "flood7days_r2"},
+    ], "7DAYS")
+    assert identity == "flood7days_r2"
+
+
+def test_collection_discovery_rejects_ambiguous_candidates() -> None:
+    with pytest.raises(GistdaAPIError, match="2 ambiguous collections"):
+        GistdaClient._select_collection([
+            {"id": "flood7days_current"},
+            {"id": "flood_7_days_latest"},
+        ], "7DAYS")
+
+
+def test_collection_discovery_rejects_no_match() -> None:
+    with pytest.raises(GistdaAPIError, match="0 collections"):
+        GistdaClient._select_collection([{"id": "flood3days_r2"}], "7DAYS")
+
+
+def test_collection_discovery_supports_string_catalog_entries() -> None:
+    identity, collection = GistdaClient._select_collection(["flood7days_r2"], "7DAYS")
+    assert identity == "flood7days_r2"
+    assert collection == {"id": "flood7days_r2"}
+
+
 def test_stac_asset_is_discovered_by_semantics_without_data_key() -> None:
     responses = iter([
         {"type": "Collection", "links": [{"rel": "items", "href": "items"}]},
