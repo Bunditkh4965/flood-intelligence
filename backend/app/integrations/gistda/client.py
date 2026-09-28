@@ -67,7 +67,18 @@ class GistdaClient:
         links = payload.get("links", [])
         if not isinstance(links, list):
             raise GistdaAPIError("GISTDA links must be an array")
-        matches = [link for link in links if isinstance(link, dict) and link.get("rel") == relation]
+        expected = relation.casefold()
+
+        def has_relation(link: dict[str, Any]) -> bool:
+            value = link.get("rel")
+            values = value if isinstance(value, list) else [value]
+            return any(
+                isinstance(item, str)
+                and item.strip().casefold().rstrip("/").rsplit("/", 1)[-1] == expected
+                for item in values
+            )
+
+        matches = [link for link in links if isinstance(link, dict) and has_relation(link)]
         if not matches:
             return None
         href = matches[0].get("href")
@@ -91,10 +102,19 @@ class GistdaClient:
 
         preferred = assets.get("data")
         if valid(preferred):
+            logger.info(
+                "Discovered GISTDA Features asset type=%s roles=%s",
+                preferred.get("type", "unknown"), preferred.get("roles", []),
+            )
             return preferred["href"]
         matches = [asset["href"] for asset in assets.values() if valid(asset)]
         if len(matches) != 1:
             raise GistdaAPIError("GISTDA STAC item must contain one GeoJSON Features asset")
+        selected = next(asset for asset in assets.values() if valid(asset))
+        logger.info(
+            "Discovered GISTDA Features asset type=%s roles=%s",
+            selected.get("type", "unknown"), selected.get("roles", []),
+        )
         return matches[0]
 
     def _discover_geojson(self, payload: dict[str, Any], url: httpx.URL,
@@ -135,6 +155,7 @@ class GistdaClient:
                 f"GISTDA STAC discovery found {len(candidates)} collections for {period}"
             )
         collection = candidates[0]
+        logger.info("Discovered GISTDA STAC collection id=%s for %s", collection["id"], period)
         self_href = self._link(collection, "self")
         collection_url = (
             listing_url.join(self_href) if self_href
@@ -153,16 +174,30 @@ class GistdaClient:
             payload, url = self._get_json(f"features/flood/{ENDPOINTS[normalized]}", normalized)
         payload, url = self._discover_geojson(payload, url, normalized)
         visited: set[str] = set()
-        for _ in range(MAX_GEOJSON_PAGES):
+        total_returned = 0
+        for page_number in range(1, MAX_GEOJSON_PAGES + 1):
             canonical_url = str(url)
             if canonical_url in visited:
                 raise GistdaAPIError("GISTDA pagination cycle detected")
             visited.add(canonical_url)
             if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
                 raise GistdaAPIError("GISTDA page is not a GeoJSON FeatureCollection")
-            yield payload
             next_href = self._link(payload, "next")
+            returned = payload.get("numberReturned")
+            returned_count = returned if isinstance(returned, int) and not isinstance(returned, bool) else len(payload["features"])
+            total_returned += len(payload["features"])
+            logger.info(
+                "GISTDA GeoJSON page=%d numberReturned=%d next=%s",
+                page_number, returned_count, next_href is not None,
+            )
+            yield payload
             if next_href is None:
+                matched = payload.get("numberMatched")
+                if isinstance(matched, int) and not isinstance(matched, bool) and matched > total_returned:
+                    raise GistdaAPIError(
+                        "GISTDA pagination ended before numberMatched was reached "
+                        f"({total_returned} of {matched})"
+                    )
                 return
             payload, url = self._get_json(url.join(next_href), normalized)
         raise GistdaAPIError(f"GISTDA pagination exceeded {MAX_GEOJSON_PAGES} pages")

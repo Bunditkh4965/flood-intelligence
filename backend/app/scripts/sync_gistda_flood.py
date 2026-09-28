@@ -1,10 +1,12 @@
 import argparse
+import logging
 
 from app.db.session import SessionLocal
 from app.services.gistda import sync_gistda_flood
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="Synchronize official GISTDA flood polygons")
     parser.add_argument("--period", required=True, choices=("1day", "3days", "7days", "30days", "all"))
     args = parser.parse_args()

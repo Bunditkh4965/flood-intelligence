@@ -101,6 +101,55 @@ def test_stac_discovery_and_relative_and_absolute_geojson_pagination() -> None:
     ]
 
 
+def test_verified_gistda_feature_collection_shape_follows_offset_next(caplog) -> None:
+    requests: list[str] = []
+    first_ten = [feature(identifier=f"feature-{index}") for index in range(10)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.params.get("offset") == "10":
+            return httpx.Response(200, json={
+                "type": "FeatureCollection", "numberMatched": 57_953,
+                "numberReturned": 1, "features": [feature(identifier="feature-10")],
+                "links": [],
+            })
+        return httpx.Response(200, json={
+            "type": "FeatureCollection", "numberMatched": 57_953,
+            "numberReturned": 10, "features": first_ten,
+            "links": [{
+                "rel": "next",
+                "href": "https://example.test/api/features/flood/7days?offset=10",
+                "type": "application/geo+json",
+            }],
+        })
+
+    with caplog.at_level(logging.INFO):
+        with GistdaClient(settings(), httpx.MockTransport(handler)) as client:
+            pages = client.iter_flood_feature_pages("7days")
+            assert len(next(pages)["features"]) == 10
+            assert len(next(pages)["features"]) == 1
+            pages.close()
+    assert requests[-1].endswith("offset=10")
+    assert "page=1 numberReturned=10 next=True" in caplog.text
+    assert "page=2 numberReturned=1 next=False" in caplog.text
+
+
+def test_incomplete_number_matched_without_recognizable_next_fails() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
+        "type": "FeatureCollection", "numberMatched": 57_953,
+        "numberReturned": 10, "features": [feature(identifier=str(index)) for index in range(10)],
+        "links": [],
+    }))
+    with GistdaClient(settings(), transport) as client:
+        with pytest.raises(GistdaAPIError, match="10 of 57953"):
+            client.fetch_flood_features("7days")
+
+
+@pytest.mark.parametrize("relation", ["NEXT", " next ", ["next"]])
+def test_next_relation_is_normalized(relation) -> None:
+    assert GistdaClient._link({"links": [{"rel": relation, "href": "next-page"}]}, "next") == "next-page"
+
+
 def test_live_stac_entrypoint_discovers_current_collection_and_does_not_send_api_key() -> None:
     paths: list[str] = []
 
