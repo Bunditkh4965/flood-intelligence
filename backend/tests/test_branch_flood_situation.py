@@ -16,9 +16,12 @@ from app.services.branch_flood_situation import classify_situation
     ("NEARBY", "PUBLIC_NONE", True, True, "GISTDA_NEARBY"),
     ("NONE", "PUBLIC_NEARBY", True, True, "PUBLIC_NEARBY"),
     ("NONE", "PUBLIC_NONE", True, True, "NO_NEARBY_FLOOD"),
-    ("NONE", "PUBLIC_NEARBY", False, True, "SOURCE_DATA_INCOMPLETE"),
-    ("NEARBY", "PUBLIC_NONE", True, False, "SOURCE_DATA_INCOMPLETE"),
+    ("NONE", "PUBLIC_NEARBY", False, True, "PUBLIC_NEARBY"),
+    ("NONE", "PUBLIC_NONE", False, True, "NO_NEARBY_FLOOD"),
+    ("NEARBY", "PUBLIC_NONE", True, False, "GISTDA_NEARBY"),
     ("DIRECT", "PUBLIC_NONE", True, False, "GISTDA_DIRECT"),
+    ("NONE", "PUBLIC_NONE", True, False, "NO_NEARBY_FLOOD"),
+    ("NONE", "PUBLIC_NONE", False, False, "SOURCE_DATA_INCOMPLETE"),
 ])
 def test_category_precedence(gistda, public, ga, pa, expected):
     assert classify_situation(gistda, public, ga, pa) == expected

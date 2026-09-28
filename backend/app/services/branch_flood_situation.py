@@ -20,18 +20,19 @@ class SituationPage:
 
 def classify_situation(gistda: str, public: str, gistda_available: bool,
                        public_available: bool) -> SituationCategory:
-    """Apply factual precedence; DIRECT remains knowable despite missing public data."""
+    """Classify with every available source; public observations are optional."""
     if gistda_available and gistda == "DIRECT":
         return SituationCategory.GISTDA_DIRECT
-    if not gistda_available or not public_available:
-        return SituationCategory.SOURCE_DATA_INCOMPLETE
-    if gistda == "NEARBY" and public == "PUBLIC_NEARBY":
+    if (gistda_available and public_available
+            and gistda == "NEARBY" and public == "PUBLIC_NEARBY"):
         return SituationCategory.MULTI_SOURCE_NEARBY
-    if gistda == "NEARBY":
+    if gistda_available and gistda == "NEARBY":
         return SituationCategory.GISTDA_NEARBY
-    if public == "PUBLIC_NEARBY":
+    if public_available and public == "PUBLIC_NEARBY":
         return SituationCategory.PUBLIC_NEARBY
-    return SituationCategory.NO_NEARBY_FLOOD
+    if gistda_available or public_available:
+        return SituationCategory.NO_NEARBY_FLOOD
+    return SituationCategory.SOURCE_DATA_INCOMPLETE
 
 
 def _combined_query() -> str:
@@ -48,12 +49,13 @@ WITH gistda_result AS ({gistda}), public_result AS ({public}), combined AS (
         p.nearest_report_reported_at,
  CASE
   WHEN :gistda_available AND g.impact_classification = 'DIRECT' THEN 'GISTDA_DIRECT'
-  WHEN NOT :gistda_available OR NOT :public_available THEN 'SOURCE_DATA_INCOMPLETE'
-  WHEN g.impact_classification = 'NEARBY' AND p.public_impact_classification = 'PUBLIC_NEARBY'
+  WHEN :gistda_available AND :public_available
+    AND g.impact_classification = 'NEARBY' AND p.public_impact_classification = 'PUBLIC_NEARBY'
     THEN 'MULTI_SOURCE_NEARBY'
-  WHEN g.impact_classification = 'NEARBY' THEN 'GISTDA_NEARBY'
-  WHEN p.public_impact_classification = 'PUBLIC_NEARBY' THEN 'PUBLIC_NEARBY'
-  ELSE 'NO_NEARBY_FLOOD' END AS situation
+  WHEN :gistda_available AND g.impact_classification = 'NEARBY' THEN 'GISTDA_NEARBY'
+  WHEN :public_available AND p.public_impact_classification = 'PUBLIC_NEARBY' THEN 'PUBLIC_NEARBY'
+  WHEN :gistda_available OR :public_available THEN 'NO_NEARBY_FLOOD'
+  ELSE 'SOURCE_DATA_INCOMPLETE' END AS situation
  FROM gistda_result g JOIN public_result p USING (store_number)
 )
 """
