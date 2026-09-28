@@ -277,6 +277,55 @@ def test_collection_listing_follows_relative_next_after_ten_unrelated_scenes() -
     assert any(url.endswith("collections?offset=10") for url in requested)
 
 
+def test_live_collection_pages_use_large_limit_and_repair_malformed_next() -> None:
+    requested: list[str] = []
+    scenes = [{"id": f"S1A_IW_GRDH_{index:04d}"} for index in range(1_000)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path.endswith("/collections/flood7days_r2"):
+            return httpx.Response(200, json={
+                "id": "flood7days_r2", "title": "Process Data 7 Days", "links": [],
+            })
+        if request.url.params.get("offset") == "1000":
+            return httpx.Response(200, json={
+                "collections": [
+                    *[{"id": f"S1B_IW_GRDH_{index:04d}"} for index in range(851)],
+                    {"id": "flood7days_r2", "title": "Process Data 7 Days"},
+                ],
+                "links": [],
+            })
+        return httpx.Response(200, json={
+            "collections": scenes,
+            "links": [{
+                "rel": "next",
+                "href": "https://disaster.gistda.or.th/app-api/proxy/resources/stac/flood/collections&limit=1000&offset=1000",
+            }],
+        })
+
+    with GistdaClient(
+        settings(stac_url="https://disaster.gistda.or.th/app-api/services/stac/flood/"),
+        httpx.MockTransport(handler),
+    ) as client:
+        collection, _ = client._stac_collection("7DAYS")
+    assert collection["id"] == "flood7days_r2"
+    assert requested[0].endswith("/collections?limit=1000&offset=0")
+    assert requested[1] == (
+        "https://disaster.gistda.or.th/app-api/proxy/resources/stac/flood/"
+        "collections?limit=1000&offset=1000"
+    )
+
+
+@pytest.mark.parametrize("href", [
+    "https://example.test/unrelated&limit=1000&offset=1000",
+    "https://example.test/collections&token=abc&offset=1000",
+    "https://example.test/collections?limit=1000&offset=1000",
+    "/collections?limit=1000&offset=1000",
+])
+def test_collection_next_repair_leaves_unrelated_and_valid_urls_unchanged(href) -> None:
+    assert GistdaClient._normalize_collection_next(href) == href
+
+
 def test_collection_listing_follows_absolute_next_and_selects_latest_revision() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/collections/flood7days_r3"):

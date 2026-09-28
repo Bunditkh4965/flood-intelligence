@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Iterator
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 ENDPOINTS = {"1DAY": "1day", "3DAYS": "3days", "7DAYS": "7days", "30DAYS": "30days"}
 MAX_GEOJSON_PAGES = 20_000
 MAX_COLLECTION_PAGES = 2_000
+COLLECTION_PAGE_SIZE = 1_000
 
 
 class GistdaConfigurationError(RuntimeError):
@@ -208,8 +209,25 @@ class GistdaClient:
             f"GISTDA STAC discovery found {len(candidates)} ambiguous collections for {period}"
         )
 
+    @staticmethod
+    def _normalize_collection_next(href: str) -> str:
+        """Repair GISTDA's verified `/collections&limit=...` link defect only."""
+        parts = urlsplit(href)
+        if parts.query or parts.fragment:
+            return href
+        match = re.fullmatch(r"(?P<path>.*(?:^|/)collections)&(?P<query>[^?#]+)", parts.path)
+        if match is None:
+            return href
+        parameters = parse_qsl(match.group("query"), keep_blank_values=True)
+        keys = {key for key, _ in parameters}
+        if not parameters or not {"limit", "offset"}.issubset(keys) or not keys <= {"limit", "offset"}:
+            return href
+        return urlunsplit((parts.scheme, parts.netloc, match.group("path"), match.group("query"), ""))
+
     def _stac_collection(self, period: str) -> tuple[dict[str, Any], httpx.URL]:
-        listing, listing_url = self._get_json("collections", period)
+        listing, listing_url = self._get_json(
+            f"collections?limit={COLLECTION_PAGE_SIZE}&offset=0", period,
+        )
         all_collections: list[Any] = []
         visited: set[str] = set()
         for page_number in range(1, MAX_COLLECTION_PAGES + 1):
@@ -227,14 +245,11 @@ class GistdaClient:
                 page_number, len(collections), next_href is not None,
             )
             if next_href is None:
-                matched = listing.get("numberMatched")
-                if isinstance(matched, int) and not isinstance(matched, bool) and matched > len(all_collections):
-                    raise GistdaAPIError(
-                        "GISTDA STAC collection pagination ended before numberMatched was reached "
-                        f"({len(all_collections)} of {matched})"
-                    )
                 break
-            listing, listing_url = self._get_json(listing_url.join(next_href), period)
+            normalized_next = self._normalize_collection_next(next_href)
+            if normalized_next != next_href:
+                logger.warning("Repaired malformed GISTDA STAC collection next link")
+            listing, listing_url = self._get_json(listing_url.join(normalized_next), period)
         else:
             raise GistdaAPIError(
                 f"GISTDA STAC collection pagination exceeded {MAX_COLLECTION_PAGES} pages"
