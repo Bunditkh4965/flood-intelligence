@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -9,6 +10,7 @@ from app.core import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 ENDPOINTS = {"1DAY": "1day", "3DAYS": "3days", "7DAYS": "7days", "30DAYS": "30days"}
+MAX_GEOJSON_PAGES = 20_000
 
 
 class GistdaConfigurationError(RuntimeError):
@@ -42,22 +44,101 @@ class GistdaClient:
     def close(self) -> None:
         self._client.close()
 
-    def fetch_flood_features(self, period: str) -> dict[str, Any]:
+    def _get_json(self, url: str | httpx.URL, period: str) -> tuple[dict[str, Any], httpx.URL]:
+        try:
+            response = self._client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            # Never interpolate the request, headers, body, or upstream text.
+            raise GistdaAPIError(f"GISTDA request failed for {period}: {type(exc).__name__}") from None
+        if not isinstance(payload, dict):
+            raise GistdaAPIError("GISTDA response must be a JSON object")
+        return payload, response.url
+
+    @staticmethod
+    def _link(payload: dict[str, Any], relation: str) -> str | None:
+        links = payload.get("links", [])
+        if not isinstance(links, list):
+            raise GistdaAPIError("GISTDA links must be an array")
+        matches = [link for link in links if isinstance(link, dict) and link.get("rel") == relation]
+        if not matches:
+            return None
+        href = matches[0].get("href")
+        if not isinstance(href, str) or not href.strip():
+            raise GistdaAPIError(f"GISTDA {relation} link is missing href")
+        return href
+
+    @staticmethod
+    def _feature_asset(item: dict[str, Any]) -> str:
+        assets = item.get("assets")
+        if not isinstance(assets, dict):
+            raise GistdaAPIError("GISTDA STAC item has no assets")
+
+        def valid(asset: Any) -> bool:
+            if not isinstance(asset, dict) or not isinstance(asset.get("href"), str):
+                return False
+            media_type = str(asset.get("type", "")).lower().split(";", 1)[0].strip()
+            roles = asset.get("roles", [])
+            semantic_role = isinstance(roles, list) and any(str(role).lower() == "features" for role in roles)
+            return media_type in {"application/geo+json", "application/vnd.geo+json"} or semantic_role
+
+        preferred = assets.get("data")
+        if valid(preferred):
+            return preferred["href"]
+        matches = [asset["href"] for asset in assets.values() if valid(asset)]
+        if len(matches) != 1:
+            raise GistdaAPIError("GISTDA STAC item must contain one GeoJSON Features asset")
+        return matches[0]
+
+    def _discover_geojson(self, payload: dict[str, Any], url: httpx.URL,
+                          period: str) -> tuple[dict[str, Any], httpx.URL]:
+        # The compatibility endpoint may already resolve to the GeoJSON asset.
+        features = payload.get("features")
+        if payload.get("type") == "FeatureCollection" and isinstance(features, list):
+            stac_items = [item for item in features if isinstance(item, dict) and "assets" in item]
+            if not stac_items:
+                return payload, url
+            asset_url = url.join(self._feature_asset(stac_items[0]))
+            return self._get_json(asset_url, period)
+        if payload.get("type") == "Feature" and "assets" in payload:
+            return self._get_json(url.join(self._feature_asset(payload)), period)
+
+        items_href = self._link(payload, "items")
+        if items_href is None:
+            raise GistdaAPIError("GISTDA response is neither GeoJSON nor a STAC collection")
+        items, items_url = self._get_json(url.join(items_href), period)
+        return self._discover_geojson(items, items_url, period)
+
+    def iter_flood_feature_pages(self, period: str) -> Iterator[dict[str, Any]]:
         normalized = period.upper()
         if normalized not in ENDPOINTS:
             raise ValueError(f"Unsupported GISTDA period: {period}")
         path = f"features/flood/{ENDPOINTS[normalized]}"
         logger.info("Fetching GISTDA flood features for %s", normalized)
-        try:
-            response = self._client.get(path)
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            # Never interpolate the request, headers, body, or upstream text.
-            raise GistdaAPIError(f"GISTDA request failed for {normalized}: {type(exc).__name__}") from None
-        if not isinstance(payload, dict):
-            raise GistdaAPIError("GISTDA response must be a JSON object")
-        return payload
+        payload, url = self._get_json(path, normalized)
+        payload, url = self._discover_geojson(payload, url, normalized)
+        visited: set[str] = set()
+        for _ in range(MAX_GEOJSON_PAGES):
+            canonical_url = str(url)
+            if canonical_url in visited:
+                raise GistdaAPIError("GISTDA pagination cycle detected")
+            visited.add(canonical_url)
+            if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
+                raise GistdaAPIError("GISTDA page is not a GeoJSON FeatureCollection")
+            yield payload
+            next_href = self._link(payload, "next")
+            if next_href is None:
+                return
+            payload, url = self._get_json(url.join(next_href), normalized)
+        raise GistdaAPIError(f"GISTDA pagination exceeded {MAX_GEOJSON_PAGES} pages")
+
+    def fetch_flood_features(self, period: str) -> dict[str, Any]:
+        """Return a combined collection for callers using the original client contract."""
+        features: list[Any] = []
+        for page in self.iter_flood_feature_pages(period):
+            features.extend(page["features"])
+        return {"type": "FeatureCollection", "features": features}
 
     def __enter__(self) -> "GistdaClient":
         return self

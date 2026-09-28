@@ -135,12 +135,36 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
     db.add(run)
     db.commit()
     try:
+        def collect_pages(source: GistdaClient) -> tuple[list[ParsedFeature], list[Rejection], int]:
+            iterator = getattr(source, "iter_flood_feature_pages", None)
+            pages = iterator(normalized) if iterator else iter((source.fetch_flood_features(normalized),))
+            all_parsed: list[ParsedFeature] = []
+            all_rejected: list[Rejection] = []
+            total_received = 0
+            seen_hashes: set[str] = set()
+            for payload in pages:
+                page_parsed, page_rejected, page_received = parse_collection(payload)
+                all_rejected.extend(
+                    Rejection(index=total_received + item.index, reason=item.reason)
+                    for item in page_rejected
+                )
+                for item in page_parsed:
+                    if item.source_hash in seen_hashes:
+                        all_rejected.append(Rejection(
+                            index=total_received,
+                            reason="duplicate feature identity across pages",
+                        ))
+                    else:
+                        seen_hashes.add(item.source_hash)
+                        all_parsed.append(item)
+                total_received += page_received
+            return all_parsed, all_rejected, total_received
+
         if client is None:
             with GistdaClient() as owned_client:
-                payload = owned_client.fetch_flood_features(normalized)
+                parsed, rejected, received = collect_pages(owned_client)
         else:
-            payload = client.fetch_flood_features(normalized)
-        parsed, rejected, received = parse_collection(payload)
+            parsed, rejected, received = collect_pages(client)
         if received == 0:
             # An empty collection is an authoritative "no current data"
             # response, but not a replacement snapshot. Keep the last known
