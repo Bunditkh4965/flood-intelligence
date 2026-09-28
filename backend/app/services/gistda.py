@@ -10,7 +10,7 @@ from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.integrations.gistda.client import GistdaClient
+from app.integrations.gistda.client import GistdaAPIError, GistdaClient, GistdaConfigurationError
 from app.models.gistda import GistdaFloodFeature, GistdaSyncRun, PERIODS
 
 
@@ -134,6 +134,7 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
     run = GistdaSyncRun(period=normalized, started_at=now, status="RUNNING")
     db.add(run)
     db.commit()
+    run_id = run.id
     try:
         def collect_pages(source: GistdaClient) -> tuple[list[ParsedFeature], list[Rejection], int]:
             iterator = getattr(source, "iter_flood_feature_pages", None)
@@ -230,10 +231,17 @@ def sync_gistda_flood(db: Session, period: str, client: GistdaClient | None = No
         return run
     except Exception as exc:
         db.rollback()
-        failed = db.get(GistdaSyncRun, run.id)
+        failed = db.get(GistdaSyncRun, run_id)
+        if failed is None:
+            raise RuntimeError(f"GISTDA sync run {run_id} disappeared while recording failure") from exc
         failed.status = "FAILED"
         failed.finished_at = datetime.now(timezone.utc)
-        failed.error_message = f"{type(exc).__name__}: {str(exc)}"[:4000]
+        if isinstance(exc, (GistdaAPIError, GistdaConfigurationError, ValueError)):
+            detail = str(exc).strip() or "no details supplied"
+        else:
+            # Unknown exceptions can embed connection strings or credentials.
+            detail = "unexpected synchronization failure; inspect secured server logs"
+        failed.error_message = f"{type(exc).__name__}: {detail}"[:4000]
         db.commit()
         db.refresh(failed)
         return failed

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -30,13 +32,17 @@ class GistdaClient:
 
     def __init__(self, settings: Settings | None = None, transport: httpx.BaseTransport | None = None) -> None:
         self.settings = settings or get_settings()
-        if not self.settings.gistda_api_key.strip():
-            raise GistdaConfigurationError("GISTDA_API_KEY is required")
-        if not self.settings.gistda_api_base_url.strip():
-            raise GistdaConfigurationError("GISTDA_API_BASE_URL is required")
+        stac_url = self.settings.gistda_stac_base_url.strip()
+        if not stac_url and not self.settings.gistda_api_key.strip():
+            raise GistdaConfigurationError("GISTDA_API_KEY is required when STAC is not configured")
+        if not stac_url and not self.settings.gistda_api_base_url.strip():
+            raise GistdaConfigurationError("GISTDA_API_BASE_URL is required when STAC is not configured")
+        self._uses_stac = bool(stac_url)
         self._client = httpx.Client(
-            base_url=self.settings.gistda_api_base_url.rstrip("/") + "/",
-            headers={"API-Key": self.settings.gistda_api_key},
+            base_url=(stac_url or self.settings.gistda_api_base_url).rstrip("/") + "/",
+            # The Disaster Platform STAC API is public. Never send the API
+            # gateway credential to a different host.
+            headers={} if stac_url else {"API-Key": self.settings.gistda_api_key},
             timeout=httpx.Timeout(self.settings.gistda_read_timeout_seconds, connect=self.settings.gistda_connect_timeout_seconds),
             transport=transport,
         )
@@ -110,13 +116,41 @@ class GistdaClient:
         items, items_url = self._get_json(url.join(items_href), period)
         return self._discover_geojson(items, items_url, period)
 
+    def _stac_collection(self, period: str) -> tuple[dict[str, Any], httpx.URL]:
+        listing, listing_url = self._get_json("collections", period)
+        collections = listing.get("collections")
+        if not isinstance(collections, list):
+            raise GistdaAPIError("GISTDA STAC collections response is malformed")
+        token = ENDPOINTS[period]
+        expected_prefix = f"flood{token}"
+        candidates = []
+        for collection in collections:
+            if not isinstance(collection, dict) or not isinstance(collection.get("id"), str):
+                continue
+            normalized_id = re.sub(r"[^a-z0-9]", "", collection["id"].lower())
+            if normalized_id.startswith(expected_prefix):
+                candidates.append(collection)
+        if len(candidates) != 1:
+            raise GistdaAPIError(
+                f"GISTDA STAC discovery found {len(candidates)} collections for {period}"
+            )
+        collection = candidates[0]
+        self_href = self._link(collection, "self")
+        collection_url = (
+            listing_url.join(self_href) if self_href
+            else listing_url.join(f"collections/{quote(collection['id'], safe='')}")
+        )
+        return self._get_json(collection_url, period)
+
     def iter_flood_feature_pages(self, period: str) -> Iterator[dict[str, Any]]:
         normalized = period.upper()
         if normalized not in ENDPOINTS:
             raise ValueError(f"Unsupported GISTDA period: {period}")
-        path = f"features/flood/{ENDPOINTS[normalized]}"
         logger.info("Fetching GISTDA flood features for %s", normalized)
-        payload, url = self._get_json(path, normalized)
+        if self._uses_stac:
+            payload, url = self._stac_collection(normalized)
+        else:
+            payload, url = self._get_json(f"features/flood/{ENDPOINTS[normalized]}", normalized)
         payload, url = self._discover_geojson(payload, url, normalized)
         visited: set[str] = set()
         for _ in range(MAX_GEOJSON_PAGES):

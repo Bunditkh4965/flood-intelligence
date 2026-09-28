@@ -18,6 +18,8 @@ def main() -> int:
                 f"inserted={run.records_inserted} updated={run.records_updated} "
                 f"unchanged={run.records_unchanged} rejected={run.records_rejected}"
             )
+            if run.status == "FAILED":
+                print(f"  reason: {run.error_message or 'failure reason was not recorded'}")
             failed = failed or run.status == "FAILED"
     return 1 if failed else 0
 

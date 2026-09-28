@@ -11,6 +11,7 @@ from app.core import Settings
 from app.db.session import get_db
 from app.integrations.gistda.client import GistdaAPIError, GistdaClient, GistdaConfigurationError
 from app.main import app
+from app.scripts import sync_gistda_flood as sync_cli
 from app.services.gistda import normalize_period, parse_collection, parse_feature, source_hash
 from app.models.gistda import GistdaFloodFeature, GistdaSyncRun
 from app.services.gistda import sync_gistda_flood
@@ -24,8 +25,12 @@ def feature(geometry=POLYGON, identifier="f-1"):
     return {"type": "Feature", "id": identifier, "geometry": geometry, "properties": {"date": "2026-09-24T00:00:00Z"}}
 
 
-def settings(key="secret-test-value"):
-    return Settings(GISTDA_API_KEY=key, GISTDA_API_BASE_URL="https://example.test/api/")
+def settings(key="secret-test-value", stac_url=""):
+    return Settings(
+        GISTDA_API_KEY=key,
+        GISTDA_API_BASE_URL="https://example.test/api/",
+        GISTDA_STAC_BASE_URL=stac_url,
+    )
 
 
 def test_missing_api_key_is_rejected() -> None:
@@ -94,6 +99,46 @@ def test_stac_discovery_and_relative_and_absolute_geojson_pagination() -> None:
         "https://example.test/stac/assets/current?offset=10",
         "https://example.test/final",
     ]
+
+
+def test_live_stac_entrypoint_discovers_current_collection_and_does_not_send_api_key() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        assert "API-Key" not in request.headers
+        if request.url.path == "/app-api/services/stac/flood/collections":
+            return httpx.Response(200, json={"collections": [{
+                "id": "flood7days_r2",
+                "links": [{
+                    "rel": "self",
+                    "href": "/app-api/services/stac/flood/collections/flood7days_r2",
+                }],
+            }]})
+        if request.url.path.endswith("/collections/flood7days_r2"):
+            return httpx.Response(200, json={
+                "type": "Collection",
+                "links": [{"rel": "items", "href": "../../../../proxy/resources/stac/flood/collections/flood7days_r2/items"}],
+            })
+        if request.url.path.endswith("/collections/flood7days_r2/items"):
+            return httpx.Response(200, json={
+                "type": "Feature",
+                "assets": {"data": {
+                    "href": "/features/changing-hash", "type": "application/geo+json",
+                    "roles": ["Features"],
+                }},
+            })
+        if request.url.path == "/features/changing-hash":
+            return httpx.Response(200, json={
+                "type": "FeatureCollection", "features": [feature(identifier="live")],
+            })
+        return httpx.Response(404)
+
+    stac_url = "https://disaster.gistda.or.th/app-api/services/stac/flood/"
+    with GistdaClient(settings(stac_url=stac_url), httpx.MockTransport(handler)) as client:
+        result = client.fetch_flood_features("7days")
+    assert [item["id"] for item in result["features"]] == ["live"]
+    assert paths[0] == "/app-api/services/stac/flood/collections"
 
 
 def test_stac_asset_is_discovered_by_semantics_without_data_key() -> None:
@@ -340,6 +385,31 @@ def test_failed_fetch_preserves_existing_data_and_records_failure() -> None:
     assert run.status == "FAILED"
     assert existing.is_active is True
     assert db.rollbacks == 1
+    assert run.error_message == "GistdaAPIError: temporary failure"
+
+
+def test_failed_sync_always_records_a_nonempty_sanitized_reason() -> None:
+    run = sync_gistda_flood(FakeSession(), "7days", StubClient(error=GistdaAPIError("")))
+    assert run.status == "FAILED"
+    assert run.error_message == "GistdaAPIError: no details supplied"
+
+
+def test_cli_prints_failed_sync_reason(monkeypatch, capsys) -> None:
+    class SessionContext:
+        def __enter__(self):
+            return object()
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(sync_cli, "SessionLocal", SessionContext)
+    monkeypatch.setattr(sync_cli, "sync_gistda_flood", lambda db, period: SimpleNamespace(
+        period="7DAYS", status="FAILED", records_received=0, records_inserted=0,
+        records_updated=0, records_unchanged=0, records_rejected=0,
+        error_message="GistdaAPIError: STAC discovery failed",
+    ))
+    monkeypatch.setattr("sys.argv", ["sync_gistda_flood", "--period", "7days"])
+    assert sync_cli.main() == 1
+    assert "reason: GistdaAPIError: STAC discovery failed" in capsys.readouterr().out
 
 
 def test_sync_counts_every_feature_across_pages() -> None:
