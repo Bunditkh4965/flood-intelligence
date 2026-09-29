@@ -36,6 +36,7 @@ def route_flood_impact(route_id: str, db: DbSession) -> RouteFloodImpact:
             db, route_id, settings.route_impact_gistda_period,
             settings.public_route_impact_radius_meters,
             settings.route_impact_public_lookback_hours,
+            settings.bma_route_proximity_meters,
         )
     except InvalidRouteGeometry as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
