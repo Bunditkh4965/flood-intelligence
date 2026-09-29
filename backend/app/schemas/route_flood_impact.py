@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.transport import RouteEndpoint, VehicleProfile
 
@@ -39,6 +39,25 @@ class PublicRouteEvidence(BaseModel):
     reported_at: datetime
 
 
+class HdmsRouteEvidence(BaseModel):
+    incident_id: int
+    source_record_id: str
+    case_id: str | None
+    road_code: str | None
+    section_code: str | None
+    section_name: str | None
+    km_start: str | None
+    km_end: str | None
+    province: str | None
+    water_depth_cm: float | None
+    road_status: str
+    incident_at: datetime | None
+    report_at: datetime | None
+    source_updated_at: datetime | None
+    survey_at: datetime | None
+    geometry_available: bool
+
+
 class RouteSourceStatus(BaseModel):
     data_available: bool
     evaluated_period_or_window: str
@@ -63,6 +82,8 @@ class RouteFloodImpact(BaseModel):
     flood_situation: RouteFloodSituation
     gistda_evidence: list[GistdaRouteEvidence]
     public_report_evidence: list[PublicRouteEvidence]
+    hdms_evidence: list[HdmsRouteEvidence] = Field(default_factory=list)
+    official_road_closure: bool = False
     public_route_impact_radius_meters: float
     source_data_status: RouteFloodSourceDataStatus
     evaluated_at: datetime

@@ -68,6 +68,21 @@ WHERE r.route_id = :route_id
 ORDER BY distance_to_route_meters, p.id
 """
 
+# Only authoritative HDMS section geometry is eligible; incident latitude and
+# longitude are deliberately never used as route-impact proxies.
+_HDMS_SQL = """
+SELECT h.id AS incident_id, h.source_record_id, h.case_id, h.road_code,
+       h.section_code, h.section_name, h.km_start, h.km_end, h.province,
+       h.water_depth_cm, h.road_status, h.incident_at, h.report_at,
+       h.source_updated_at, h.survey_at, h.geometry_available
+FROM transport_routes r
+JOIN hdms_incidents h ON h.is_active IS TRUE
+ AND h.geometry_available IS TRUE
+ AND ST_Intersects(h.road_geometry, r.route_geometry)
+WHERE r.route_id = :route_id
+ORDER BY h.id
+"""
+
 
 def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
                                 radius_meters: float, lookback_hours: int) -> dict | None:
@@ -84,6 +99,7 @@ def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
               "vehicle_profile": route["vehicle_profile"]}
     gistda = [dict(row) for row in db.execute(text(_GISTDA_SQL), common).mappings()]
     public = [dict(row) for row in db.execute(text(_PUBLIC_SQL), common).mappings()]
+    hdms = [dict(row) for row in db.execute(text(_HDMS_SQL), common).mappings()]
     for item in gistda:
         if isinstance(item["representative_intersection"], str):
             item["representative_intersection"] = json.loads(item["representative_intersection"])
@@ -114,6 +130,8 @@ def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
         "distance_km": float(route["distance_km"]), "duration_minutes": float(route["duration_minutes"]),
         "calculated_at": route["calculated_at"], "flood_situation": situation,
         "gistda_evidence": gistda, "public_report_evidence": public,
+        "hdms_evidence": hdms,
+        "official_road_closure": any(item["road_status"] == "IMPASSABLE" for item in hdms),
         "public_route_impact_radius_meters": radius_meters,
         "source_data_status": {"complete": ga and pa,
           "gistda": {"data_available": ga, "evaluated_period_or_window": period,
