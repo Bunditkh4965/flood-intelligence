@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.main import app
 from app.schemas.route_flood_impact import RouteFloodSituation
 from app.services.route_flood_impact import (
-    _GISTDA_SQL, _PUBLIC_SQL, InvalidRouteGeometry, classify_route_flood_impact,
+    _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, InvalidRouteGeometry, classify_route_flood_impact,
 )
 
 
@@ -31,6 +31,8 @@ def test_spatial_sql_uses_real_route_and_index_friendly_postgis_operations():
     assert "ST_Distance(p.flood_location, r.route_geometry::geography)" in _PUBLIC_SQL
     assert "verification_status = ANY" in _PUBLIC_SQL
     assert "ST_MakeLine" not in _GISTDA_SQL + _PUBLIC_SQL
+    assert "ST_Intersects(h.road_geometry, r.route_geometry)" in _HDMS_SQL
+    assert "latitude" not in _HDMS_SQL and "longitude" not in _HDMS_SQL
 
 
 def _result():
