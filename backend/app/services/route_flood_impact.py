@@ -83,9 +83,21 @@ WHERE r.route_id = :route_id
 ORDER BY h.id
 """
 
+_BMA_SQL = """
+SELECT b.id AS observation_id, b.source_record_id, b.station_id, b.station_name,
+       b.road_name, b.source_status, b.water_level_cm, b.observed_at,
+       ST_Distance(b.location::geography, r.route_geometry::geography) AS distance_to_route_meters
+FROM transport_routes r
+JOIN bma_road_water_observations b ON b.is_active IS TRUE
+ AND ST_DWithin(b.location::geography, r.route_geometry::geography, :bma_radius_meters)
+WHERE r.route_id = :route_id
+ORDER BY distance_to_route_meters, b.id
+"""
+
 
 def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
-                                radius_meters: float, lookback_hours: int) -> dict | None:
+                                radius_meters: float, lookback_hours: int,
+                                bma_radius_meters: float = 50.0) -> dict | None:
     route = db.execute(text(_ROUTE_SQL), {"route_id": route_id}).mappings().one_or_none()
     if route is None:
         return None
@@ -97,13 +109,17 @@ def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
               "reported_from": reported_from,
               "eligible_statuses": list(get_eligible_verification_statuses(db)),
               "vehicle_profile": route["vehicle_profile"]}
+    common["bma_radius_meters"] = bma_radius_meters
     gistda = [dict(row) for row in db.execute(text(_GISTDA_SQL), common).mappings()]
     public = [dict(row) for row in db.execute(text(_PUBLIC_SQL), common).mappings()]
     hdms = [dict(row) for row in db.execute(text(_HDMS_SQL), common).mappings()]
+    bma = [dict(row) for row in db.execute(text(_BMA_SQL), common).mappings()]
     for item in gistda:
         if isinstance(item["representative_intersection"], str):
             item["representative_intersection"] = json.loads(item["representative_intersection"])
     for item in public:
+        item["distance_to_route_meters"] = float(item["distance_to_route_meters"])
+    for item in bma:
         item["distance_to_route_meters"] = float(item["distance_to_route_meters"])
 
     status = db.execute(text("""
@@ -131,8 +147,10 @@ def evaluate_route_flood_impact(db: Session, route_id: str, period: str,
         "calculated_at": route["calculated_at"], "flood_situation": situation,
         "gistda_evidence": gistda, "public_report_evidence": public,
         "hdms_evidence": hdms,
+        "bma_evidence": bma,
         "official_road_closure": any(item["road_status"] == "IMPASSABLE" for item in hdms),
         "public_route_impact_radius_meters": radius_meters,
+        "bma_route_proximity_meters": bma_radius_meters,
         "source_data_status": {"complete": ga and pa,
           "gistda": {"data_available": ga, "evaluated_period_or_window": period,
                      "latest_source_at": status["gistda_latest"]},
