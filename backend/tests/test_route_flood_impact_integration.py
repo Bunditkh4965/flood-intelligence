@@ -9,8 +9,9 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
-from app.services.route_flood_impact import _GISTDA_SQL, _PUBLIC_SQL
+from app.services.route_flood_impact import _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, evaluate_route_flood_impact
 
 ALEMBIC_INI = Path(__file__).parents[2] / "database" / "alembic.ini"
 
@@ -34,7 +35,7 @@ def _engine():
 def test_route_polygon_and_public_point_boundaries_many_coordinates():
     engine = _engine()
     with engine.begin() as c:
-        c.execute(text("TRUNCATE transport_routes, gistda_flood_features, flood_reports RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE transport_routes, gistda_flood_features, flood_reports, hdms_incidents RESTART IDENTITY CASCADE"))
         # 1,001 coordinates exercise the persisted road shape, not an endpoint chord.
         c.execute(text("""
           INSERT INTO transport_routes(route_id,origin_type,origin_code,destination_type,destination_code,
@@ -42,6 +43,18 @@ def test_route_polygon_and_public_point_boundaries_many_coordinates():
           SELECT 'r','DC','d','BRANCH','b','6W',1,1,
             ST_MakeLine(ARRAY(SELECT ST_SetSRID(ST_Point(100+i/100000.0,13),4326) FROM generate_series(0,1000)i)),
             'VALHALLA',now()
+        """))
+        c.execute(text("""
+          INSERT INTO hdms_incidents(source_record_id,case_id,road_status,is_active,road_geometry,
+            geometry_available,source_metadata,synced_at)
+          VALUES
+            ('case:closed','closed','IMPASSABLE',true,
+             ST_GeomFromText('LINESTRING(100.004 13,100.006 13)',4326),true,'{}',now()),
+            ('case:passable','passable','PASSABLE',true,
+             ST_GeomFromText('LINESTRING(100.007 13,100.008 13)',4326),true,'{}',now()),
+            ('case:away','away','IMPASSABLE',true,
+             ST_GeomFromText('LINESTRING(101 14,101.1 14.1)',4326),true,'{}',now()),
+            ('case:no-geometry','no-geometry','IMPASSABLE',true,NULL,false,'{}',now())
         """))
         c.execute(text("""
           INSERT INTO gistda_flood_features(period,geometry,source,synced_at,source_properties,source_hash,is_active)
@@ -65,6 +78,19 @@ def test_route_polygon_and_public_point_boundaries_many_coordinates():
                 "vehicle_profile":"6W"}
         polygons=c.execute(text(_GISTDA_SQL),params).mappings().all()
         reports=c.execute(text(_PUBLIC_SQL),params).mappings().all()
+        incidents=c.execute(text(_HDMS_SQL),params).mappings().all()
         assert [p["feature_id"] for p in polygons] == [1]
         assert [r["report_code"] for r in reports] == ["inside", "boundary"]
         assert float(reports[1]["distance_to_route_meters"]) == pytest.approx(300, abs=.01)
+        assert [item["case_id"] for item in incidents] == ["closed", "passable"]
+
+    with Session(engine) as session:
+        impact = evaluate_route_flood_impact(session, "r", "3DAYS", 300, 24)
+        assert impact["official_road_closure"] is True
+        assert {item["case_id"] for item in impact["hdms_evidence"]} == {"closed", "passable"}
+        assert impact["gistda_evidence"] and impact["public_report_evidence"]
+        session.execute(text("UPDATE hdms_incidents SET is_active=false WHERE case_id='closed'"))
+        session.commit()
+        impact = evaluate_route_flood_impact(session, "r", "3DAYS", 300, 24)
+        assert impact["official_road_closure"] is False
+        assert [item["case_id"] for item in impact["hdms_evidence"]] == ["passable"]

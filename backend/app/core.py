@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     public_route_impact_radius_meters: float = Field(default=300.0, gt=0)
     route_impact_public_lookback_hours: int = Field(default=24, gt=0)
     route_impact_gistda_period: str = Field(default="3DAYS", pattern="^(1DAY|3DAYS|7DAYS|30DAYS)$")
+    hdms_enabled: bool = False
+    hdms_base_url: str = "https://hdms.doh.go.th/internal-api"
+    hdms_timeout_seconds: float = Field(default=15.0, gt=0)
+    # Reserved for evidence-policy configuration in the next stage. An empty
+    # mapping means no water-depth-based vehicle passability is inferred.
+    vehicle_water_depth_thresholds_cm: dict[str, float] = Field(default_factory=dict)
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

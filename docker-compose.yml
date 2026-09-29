@@ -28,6 +28,9 @@ services:
       ROUTING_PROVIDER: ${ROUTING_PROVIDER:-}
       VALHALLA_URL: ${VALHALLA_URL:-}
       VALHALLA_TIMEOUT_SECONDS: ${VALHALLA_TIMEOUT_SECONDS:-10}
+      HDMS_ENABLED: ${HDMS_ENABLED:-false}
+      HDMS_BASE_URL: ${HDMS_BASE_URL:-https://hdms.doh.go.th/internal-api}
+      HDMS_TIMEOUT_SECONDS: ${HDMS_TIMEOUT_SECONDS:-15}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
