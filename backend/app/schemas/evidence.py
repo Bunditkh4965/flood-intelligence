@@ -11,6 +11,7 @@ class EvidenceSource(StrEnum):
     GISTDA = "GISTDA"
     PUBLIC = "PUBLIC"
     HDMS = "HDMS"
+    BMA = "BMA"
 
 
 class EvidenceType(StrEnum):
