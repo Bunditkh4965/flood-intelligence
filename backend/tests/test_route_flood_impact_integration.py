@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.services.route_flood_impact import _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, evaluate_route_flood_impact
+from app.services.route_flood_impact import _BMA_SQL, _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, evaluate_route_flood_impact
 
 ALEMBIC_INI = Path(__file__).parents[2] / "database" / "alembic.ini"
 
@@ -35,7 +35,7 @@ def _engine():
 def test_route_polygon_and_public_point_boundaries_many_coordinates():
     engine = _engine()
     with engine.begin() as c:
-        c.execute(text("TRUNCATE transport_routes, gistda_flood_features, flood_reports, hdms_incidents RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE transport_routes, gistda_flood_features, flood_reports, hdms_incidents, bma_road_water_observations RESTART IDENTITY CASCADE"))
         # 1,001 coordinates exercise the persisted road shape, not an endpoint chord.
         c.execute(text("""
           INSERT INTO transport_routes(route_id,origin_type,origin_code,destination_type,destination_code,
@@ -79,18 +79,26 @@ def test_route_polygon_and_public_point_boundaries_many_coordinates():
         polygons=c.execute(text(_GISTDA_SQL),params).mappings().all()
         reports=c.execute(text(_PUBLIC_SQL),params).mappings().all()
         incidents=c.execute(text(_HDMS_SQL),params).mappings().all()
+        c.execute(text("""INSERT INTO bma_road_water_observations(source_record_id,station_id,source_latitude,
+          source_longitude,location,fingerprint,is_active,synced_at) VALUES
+          ('master:near','near',13,100.005,ST_GeomFromText('POINT(100.005 13)',4326),'near',true,now()),
+          ('master:away','away',14,101,ST_GeomFromText('POINT(101 14)',4326),'away',true,now())"""))
+        points=c.execute(text(_BMA_SQL),{**params,"bma_radius_meters":50}).mappings().all()
         assert [p["feature_id"] for p in polygons] == [1]
         assert [r["report_code"] for r in reports] == ["inside", "boundary"]
         assert float(reports[1]["distance_to_route_meters"]) == pytest.approx(300, abs=.01)
         assert [item["case_id"] for item in incidents] == ["closed", "passable"]
+        assert [item["station_id"] for item in points] == ["near"]
 
     with Session(engine) as session:
         impact = evaluate_route_flood_impact(session, "r", "3DAYS", 300, 24)
         assert impact["official_road_closure"] is True
         assert {item["case_id"] for item in impact["hdms_evidence"]} == {"closed", "passable"}
         assert impact["gistda_evidence"] and impact["public_report_evidence"]
+        assert [item["station_id"] for item in impact["bma_evidence"]] == ["near"]
         session.execute(text("UPDATE hdms_incidents SET is_active=false WHERE case_id='closed'"))
         session.commit()
         impact = evaluate_route_flood_impact(session, "r", "3DAYS", 300, 24)
         assert impact["official_road_closure"] is False
+        assert impact["bma_evidence"]
         assert [item["case_id"] for item in impact["hdms_evidence"]] == ["passable"]
