@@ -33,3 +33,6 @@ class BmaRoadWaterRead(BaseModel):
     synced_at: datetime
     created_at: datetime
     updated_at: datetime
+Completely output file numbers: 1–10.
+
+Remaining file numbers: 11–20.
