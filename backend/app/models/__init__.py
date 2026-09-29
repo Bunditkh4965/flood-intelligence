@@ -2,6 +2,7 @@ from app.models.branch import Branch
 from app.models.flood_report import FloodReport, FloodReportCodeSequence, FloodReportPhoto, SystemConfiguration
 from app.models.gistda import GistdaFloodFeature, GistdaSyncRun
 from app.models.hdms import HdmsIncident, HdmsSyncRun
+from app.models.bma import BmaRoadWaterObservation, BmaSyncRun
 from app.models.transport import DistributionCenter, TransportRoute
 
-__all__ = ["Branch", "DistributionCenter", "TransportRoute", "FloodReport", "FloodReportCodeSequence", "FloodReportPhoto", "SystemConfiguration", "GistdaFloodFeature", "GistdaSyncRun", "HdmsIncident", "HdmsSyncRun"]
+__all__ = ["Branch", "DistributionCenter", "TransportRoute", "FloodReport", "FloodReportCodeSequence", "FloodReportPhoto", "SystemConfiguration", "GistdaFloodFeature", "GistdaSyncRun", "HdmsIncident", "HdmsSyncRun", "BmaRoadWaterObservation", "BmaSyncRun"]

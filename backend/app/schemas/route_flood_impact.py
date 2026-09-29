@@ -58,6 +58,18 @@ class HdmsRouteEvidence(BaseModel):
     geometry_available: bool
 
 
+class BmaRouteEvidence(BaseModel):
+    observation_id: int
+    source_record_id: str
+    station_id: str | None
+    station_name: str | None
+    road_name: str | None
+    source_status: str | None
+    water_level_cm: float | None
+    observed_at: datetime | None
+    distance_to_route_meters: float
+
+
 class RouteSourceStatus(BaseModel):
     data_available: bool
     evaluated_period_or_window: str
@@ -83,7 +95,9 @@ class RouteFloodImpact(BaseModel):
     gistda_evidence: list[GistdaRouteEvidence]
     public_report_evidence: list[PublicRouteEvidence]
     hdms_evidence: list[HdmsRouteEvidence] = Field(default_factory=list)
+    bma_evidence: list[BmaRouteEvidence] = Field(default_factory=list)
     official_road_closure: bool = False
     public_route_impact_radius_meters: float
+    bma_route_proximity_meters: float = 50
     source_data_status: RouteFloodSourceDataStatus
     evaluated_at: datetime

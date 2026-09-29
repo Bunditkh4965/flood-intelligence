@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.main import app
 from app.schemas.route_flood_impact import RouteFloodSituation
 from app.services.route_flood_impact import (
-    _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, InvalidRouteGeometry, classify_route_flood_impact,
+    _BMA_SQL, _GISTDA_SQL, _HDMS_SQL, _PUBLIC_SQL, InvalidRouteGeometry, classify_route_flood_impact,
 )
 
 
@@ -33,6 +33,8 @@ def test_spatial_sql_uses_real_route_and_index_friendly_postgis_operations():
     assert "ST_MakeLine" not in _GISTDA_SQL + _PUBLIC_SQL
     assert "ST_Intersects(h.road_geometry, r.route_geometry)" in _HDMS_SQL
     assert "latitude" not in _HDMS_SQL and "longitude" not in _HDMS_SQL
+    assert "ST_DWithin(b.location::geography, r.route_geometry::geography, :bma_radius_meters)" in _BMA_SQL
+    assert "ST_Distance(b.location::geography, r.route_geometry::geography)" in _BMA_SQL
 
 
 def _result():
@@ -41,6 +43,7 @@ def _result():
       "routing_provider": "VALHALLA", "distance_km": 10, "duration_minutes": 20,
       "calculated_at": "2026-09-25T00:00:00Z", "flood_situation": "NO_DETECTED_ROUTE_IMPACT",
       "gistda_evidence": [], "public_report_evidence": [],
+      "bma_evidence": [], "official_road_closure": False, "bma_route_proximity_meters": 50,
       "public_route_impact_radius_meters": 300,
       "source_data_status": {"complete": True,
         "gistda": {"data_available": True, "evaluated_period_or_window": "3DAYS", "latest_source_at": None},
@@ -60,6 +63,7 @@ def test_route_impact_endpoint(client, monkeypatch):
     response = client.get("/api/v1/routes/r1/flood-impact")
     assert response.status_code == 200
     assert response.json()["routing_provider"] == "VALHALLA"
+    assert response.json()["official_road_closure"] is False
 
 
 def test_nonexistent_route(client, monkeypatch):

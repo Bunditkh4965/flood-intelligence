@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     hdms_enabled: bool = False
     hdms_base_url: str = "https://hdms.doh.go.th/internal-api"
     hdms_timeout_seconds: float = Field(default=15.0, gt=0)
+    bma_enabled: bool = False
+    bma_base_url: str = "https://gis-portal.disaster.go.th/arcgis/rest/services/Map116/DPM_RUNOFF_STATION_DDS_DSS/FeatureServer/1"
+    bma_timeout_seconds: float = Field(default=15.0, gt=0)
+    # A small road-association radius limits false matches on Bangkok's dense network.
+    bma_route_proximity_meters: float = Field(default=50.0, gt=0)
     # Reserved for evidence-policy configuration in the next stage. An empty
     # mapping means no water-depth-based vehicle passability is inferred.
     vehicle_water_depth_thresholds_cm: dict[str, float] = Field(default_factory=dict)

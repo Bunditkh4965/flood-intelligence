@@ -11,6 +11,7 @@ from app.api.branch_flood_situation import router as branch_flood_situation_rout
 from app.api.distribution_centers import router as distribution_centers_router
 from app.api.routes import router as routes_router
 from app.api.hdms import router as hdms_router
+from app.api.bma import router as bma_router
 
 app = FastAPI(title="Flood Intelligence Platform", version="0.1.0")
 origins = [origin.strip() for origin in get_settings().cors_allowed_origins.split(",") if origin.strip()]
@@ -24,6 +25,7 @@ app.include_router(branch_flood_situation_router)
 app.include_router(distribution_centers_router)
 app.include_router(routes_router)
 app.include_router(hdms_router)
+app.include_router(bma_router)
 
 
 @app.get("/health", tags=["health"])
