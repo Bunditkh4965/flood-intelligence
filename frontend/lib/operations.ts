@@ -28,7 +28,7 @@ export interface Summary { gistda_direct:number;multi_source_nearby:number;gistd
 export interface DC { dc_code:string;dc_name:string;latitude:number;longitude:number;status:string }
 export interface PublicReport {report_code:string;flood_location:{latitude:number;longitude:number};water_level_cm:number;road_status:string;verification_status:string;reported_at:string}
 export interface RouteResult {route_id:string;origin_code:string;destination_code:string;vehicle_profile:string;distance_km:number;duration_minutes:number;route_geometry:GeoJSON.LineString;routing_provider:string;calculated_at:string}
-export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
+export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;hdms_evidence:HdmsRouteEvidence[];bma_evidence:BmaRouteEvidence[];official_road_closure:boolean;bma_route_proximity_meters:number;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
 
 export function matchesSearch(query:string, item:{store_number?:string;store_name?:string;city?:string;dc_code?:string;dc_name?:string}) {
   const q=query.trim().toLocaleLowerCase("th");
