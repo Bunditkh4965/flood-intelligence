@@ -95,13 +95,17 @@ def _row():
 
 def test_read_only_incident_endpoints(monkeypatch):
     app.dependency_overrides[get_db] = lambda: object()
-    monkeypatch.setattr(api, "list_incidents", lambda db, active: [_row()])
-    monkeypatch.setattr(api, "get_incident", lambda db, incident_id: _row() if incident_id == 1 else None)
+    record = vars(_row()) | {"road_geometry": {
+        "type": "LineString", "coordinates": [[100.5, 13.5], [100.6, 13.6]],
+    }}
+    monkeypatch.setattr(api, "list_incident_records", lambda db, active: [record])
+    monkeypatch.setattr(api, "get_incident_record", lambda db, incident_id: record if incident_id == 1 else None)
     try:
         client = TestClient(app)
         response = client.get("/api/v1/hdms/incidents")
         assert response.status_code == 200
         assert response.json()[0]["geometry_available"] is True
+        assert response.json()[0]["road_geometry"]["coordinates"][0] == [100.5, 13.5]
         assert "source_metadata" not in response.json()[0]
         assert client.get("/api/v1/hdms/incidents/999").status_code == 404
     finally:

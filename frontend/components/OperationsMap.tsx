@@ -3,13 +3,27 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
 import { MAP_CONFIG } from "@/lib/config";
-import { BranchSituation, DC, PublicReport, RouteImpact, RouteResult, situationColors } from "@/lib/operations";
+import { BranchSituation, DC, HdmsIncident, hdmsMarkerPoint, hdmsStatusStyle, PublicReport, RouteImpact, RouteResult, situationColors } from "@/lib/operations";
 
-type Layers = { branches:boolean; dcs:boolean; gistda:boolean; reports:boolean; route:boolean };
+export type MapLayers = { branches:boolean; dcs:boolean; gistda:boolean; hdms:boolean; reports:boolean; route:boolean };
+type Layers = MapLayers;
 type GroupKey = keyof Layers;
-type Props = { branches:BranchSituation[]; dcs:DC[]; gistda:GeoJSON.FeatureCollection|null; reports:PublicReport[]; route:RouteResult|null; impact:RouteImpact|null; layers:Layers; selected?:{lat:number;lng:number;key:string}; onSelect:(store:string)=>void };
+type Props = { branches:BranchSituation[]; dcs:DC[]; gistda:GeoJSON.FeatureCollection|null; hdms:HdmsIncident[]; reports:PublicReport[]; route:RouteResult|null; impact:RouteImpact|null; layers:Layers; selected?:{lat:number;lng:number;key:string}; onSelect:(store:string)=>void };
 
-export default function OperationsMap({branches,dcs,gistda,reports,route,impact,layers,selected,onSelect}:Props) {
+export function hdmsPopup(incident:HdmsIncident):HTMLElement {
+  const popup=document.createElement("div");popup.className="hdms-popup";
+  const location=[incident.section_name,incident.road_code&&`สาย ${incident.road_code}`,incident.province].filter(Boolean).join(" · ");
+  const timestamp=incident.source_updated_at||incident.report_at||incident.incident_at||incident.survey_at;
+  const rows:[[string,string],[string,string]]|Array<[string,string]>=[["ถนน / เส้นทาง / สถานที่",location||"ไม่มีข้อมูล"],["สถานะ",incident.road_status]];
+  if(incident.water_depth_cm!==null)rows.push(["ระดับน้ำ",`${incident.water_depth_cm} ซม.`]);
+  if(timestamp)rows.push(["เหตุการณ์ / อัปเดต",new Date(timestamp).toLocaleString("th-TH")]);
+  rows.push(["แหล่งที่มา","HDMS"]);
+  const title=document.createElement("strong");title.textContent=`HDMS${incident.case_id?` · ${incident.case_id}`:""}`;popup.append(title);
+  for(const [label,value] of rows){const row=document.createElement("p");const term=document.createElement("b");term.textContent=`${label}: `;row.append(term,value);popup.append(row)}
+  return popup;
+}
+
+export default function OperationsMap({branches,dcs,gistda,hdms,reports,route,impact,layers,selected,onSelect}:Props) {
   const node = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map|null>(null);
   const vectorRenderer = useRef<L.SVG|null>(null);
@@ -24,7 +38,7 @@ export default function OperationsMap({branches,dcs,gistda,reports,route,impact,
     const instance = L.map(node.current, {preferCanvas:false}).setView([13.2,101],6);
     L.tileLayer(MAP_CONFIG.url, {attribution:MAP_CONFIG.attribution,maxZoom:19}).addTo(instance);
     const renderer = L.svg({padding:.1});
-    const stableGroups = {branches:L.layerGroup(),dcs:L.layerGroup(),gistda:L.layerGroup(),reports:L.layerGroup(),route:L.layerGroup()};
+    const stableGroups = {branches:L.layerGroup(),dcs:L.layerGroup(),gistda:L.layerGroup(),hdms:L.layerGroup(),reports:L.layerGroup(),route:L.layerGroup()};
     Object.values(stableGroups).forEach(group => group.addTo(instance));
     map.current = instance;
     vectorRenderer.current = renderer;
@@ -67,6 +81,7 @@ export default function OperationsMap({branches,dcs,gistda,reports,route,impact,
 
   useEffect(() => { const group=groups.current?.dcs;if(!group)return;group.clearLayers();dcs.forEach(dc=>L.circleMarker([dc.latitude,dc.longitude],{renderer:vectorRenderer.current??undefined,radius:9,color:"#fff",weight:2,fillColor:"#073b5c",fillOpacity:1}).bindTooltip(`DC ${dc.dc_code} · ${dc.dc_name}`).addTo(group));return()=>{group.clearLayers()}; }, [dcs]);
   useEffect(() => { const group=groups.current?.gistda;if(!group)return;group.clearLayers();if(gistda)L.geoJSON(gistda,{style:{renderer:vectorRenderer.current??undefined,color:"#137e99",weight:1,fillColor:"#2caec4",fillOpacity:.22}}).addTo(group);return()=>{group.clearLayers()}; }, [gistda]);
+  useEffect(() => { const group=groups.current?.hdms,renderer=vectorRenderer.current;if(!group||!renderer)return;group.clearLayers();for(const incident of hdms){const point=hdmsMarkerPoint(incident);if(!point)continue;const style=hdmsStatusStyle(incident.road_status);L.geoJSON(incident.road_geometry!,{style:{renderer,color:style.color,weight:incident.road_status==="IMPASSABLE"?5:3,opacity:.65}}).addTo(group);L.circleMarker(point,{renderer,...style,fillOpacity:1}).bindPopup(hdmsPopup(incident)).bindTooltip(`HDMS · ${incident.section_name||incident.road_code||incident.case_id||incident.source_record_id}`).addTo(group)}return()=>{group.clearLayers()}; }, [hdms]);
   useEffect(() => { const group=groups.current?.reports;if(!group)return;group.clearLayers();reports.forEach(report=>L.circleMarker([report.flood_location.latitude,report.flood_location.longitude],{renderer:vectorRenderer.current??undefined,radius:7,color:"#fff",weight:2,fillColor:"#e7a923",fillOpacity:1}).bindTooltip(`${report.report_code} · ${report.verification_status}`).addTo(group));return()=>{group.clearLayers()}; }, [reports]);
   useEffect(() => { const group=groups.current?.route;if(!group)return;group.clearLayers();if(route)L.geoJSON(route.route_geometry,{style:{renderer:vectorRenderer.current??undefined,color:"#073b5c",weight:6,opacity:.9}}).addTo(group);impact?.gistda_evidence.forEach(e=>{if(e.representative_intersection)L.geoJSON(e.representative_intersection,{pointToLayer:(_,p)=>L.circleMarker(p,{renderer:vectorRenderer.current??undefined,radius:8,color:"#c9382b",fillOpacity:1})}).addTo(group)});return()=>{group.clearLayers()}; }, [route,impact]);
 

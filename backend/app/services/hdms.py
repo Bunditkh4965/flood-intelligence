@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from geoalchemy2.elements import WKTElement
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.integrations.hdms.client import HdmsAPIError, HdmsClient
@@ -240,6 +240,28 @@ def list_incidents(db: Session, active: bool | None = True) -> list[HdmsIncident
     return list(db.scalars(query))
 
 
+def list_incident_records(db: Session, active: bool | None = True) -> list[dict[str, Any]]:
+    """Return incidents with their authoritative road geometry as GeoJSON."""
+    query = select(HdmsIncident, func.ST_AsGeoJSON(HdmsIncident.road_geometry).label("road_geometry"))
+    if active is not None:
+        query = query.where(HdmsIncident.is_active.is_(active))
+    query = query.order_by(HdmsIncident.id)
+    return [_incident_record(incident, geometry) for incident, geometry in db.execute(query)]
+
+
+def _incident_record(incident: HdmsIncident, geometry: str | None) -> dict[str, Any]:
+    values = {column.name: getattr(incident, column.name) for column in HdmsIncident.__table__.columns
+              if column.name not in {"road_geometry", "source_metadata"}}
+    values["road_geometry"] = json.loads(geometry) if geometry else None
+    return values
+
+
 def get_incident(db: Session, incident_id: int) -> HdmsIncident | None:
     return db.get(HdmsIncident, incident_id)
 
+
+def get_incident_record(db: Session, incident_id: int) -> dict[str, Any] | None:
+    row = db.execute(select(
+        HdmsIncident, func.ST_AsGeoJSON(HdmsIncident.road_geometry).label("road_geometry"),
+    ).where(HdmsIncident.id == incident_id)).one_or_none()
+    return _incident_record(*row) if row else None

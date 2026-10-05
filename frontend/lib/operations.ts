@@ -27,8 +27,25 @@ export interface BranchSituation { store_number:string; store_name:string; city:
 export interface Summary { gistda_direct:number;multi_source_nearby:number;gistda_nearby:number;public_nearby:number;no_nearby_flood:number;source_data_incomplete:number }
 export interface DC { dc_code:string;dc_name:string;latitude:number;longitude:number;status:string }
 export interface PublicReport {report_code:string;flood_location:{latitude:number;longitude:number};water_level_cm:number;road_status:string;verification_status:string;reported_at:string}
+export interface HdmsIncident {id:number;source_record_id:string;case_id:string|null;road_code:string|null;section_code:string|null;section_name:string|null;km_start:string|null;km_end:string|null;province:string|null;amphoe:string|null;tambon:string|null;water_depth_cm:number|null;road_status:"PASSABLE"|"IMPASSABLE"|"UNKNOWN";incident_at:string|null;report_at:string|null;source_updated_at:string|null;survey_at:string|null;source_status:string|null;is_active:boolean;geometry_available:boolean;road_geometry:GeoJSON.LineString|null}
 export interface RouteResult {route_id:string;origin_code:string;destination_code:string;vehicle_profile:string;distance_km:number;duration_minutes:number;route_geometry:GeoJSON.LineString;routing_provider:string;calculated_at:string}
-export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
+export interface HdmsRouteEvidence {incident_id:number;source_record_id:string;case_id:string|null;road_code:string|null;section_name:string|null;road_status:string;water_depth_cm:number|null}
+export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;hdms_evidence:HdmsRouteEvidence[];official_road_closure:boolean;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
+
+export const hdmsStatusStyle = (status:string) => status === "IMPASSABLE"
+  ? {color:"#8f1d16",fillColor:"#d43227",radius:10,weight:3}
+  : status === "PASSABLE"
+    ? {color:"#a95508",fillColor:"#ed8a1c",radius:7,weight:2}
+    : {color:"#536772",fillColor:"#82929a",radius:7,weight:2};
+
+export function hdmsMarkerPoint(incident:HdmsIncident):[number,number]|null {
+  const coordinates=incident.road_geometry?.coordinates;
+  if(!incident.geometry_available||!coordinates?.length)return null;
+  const valid=coordinates.every(position=>position.length>=2&&Number.isFinite(position[0])&&Number.isFinite(position[1])&&position[0]>=-180&&position[0]<=180&&position[1]>=-90&&position[1]<=90);
+  if(!valid)return null;
+  const [longitude,latitude]=coordinates[Math.floor(coordinates.length/2)];
+  return [latitude,longitude];
+}
 
 export function matchesSearch(query:string, item:{store_number?:string;store_name?:string;city?:string;dc_code?:string;dc_name?:string}) {
   const q=query.trim().toLocaleLowerCase("th");
