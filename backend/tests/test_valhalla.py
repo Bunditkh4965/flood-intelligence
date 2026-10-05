@@ -79,6 +79,29 @@ def test_non_2xx_response() -> None:
         ValhallaRoutingProvider("http://valhalla", client=client).calculate_route((1, 2), (3, 4), "4W")
 
 
+def test_http_400_preserves_sanitized_provider_detail() -> None:
+    client = Mock(post=Mock(return_value=_response(400, {
+        "error": "Exceeded maximum circumference for exclude_polygons: 10000 meters",
+        "token": "must-not-appear",
+    })))
+    with pytest.raises(RoutingProviderResponseError) as error:
+        ValhallaRoutingProvider("http://valhalla", client=client).calculate_route((1, 2), (3, 4), "4W")
+    assert "HTTP 400" in str(error.value)
+    assert "Exceeded maximum circumference" in str(error.value)
+    assert "must-not-appear" not in str(error.value)
+
+
+def test_plain_text_provider_detail_redacts_credentials_and_query_strings() -> None:
+    request = httpx.Request("POST", "http://valhalla/route")
+    response = httpx.Response(500, request=request,
+        text="failure at https://host/path?api_key=secret token=also-secret")
+    client = Mock(post=Mock(return_value=response))
+    with pytest.raises(RoutingProviderResponseError) as error:
+        ValhallaRoutingProvider("http://valhalla", client=client).calculate_route((1, 2), (3, 4), "4W")
+    assert "failure at https://host/path?[REDACTED]" in str(error.value)
+    assert "secret" not in str(error.value)
+
+
 @pytest.mark.parametrize("payload", [{}, {"trip": {"summary": {}, "legs": [{}]}}])
 def test_malformed_response(payload: object) -> None:
     client = Mock(post=Mock(return_value=_response(payload=payload)))
