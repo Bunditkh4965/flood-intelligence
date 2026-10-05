@@ -22,6 +22,17 @@ export const situationColors: Record<Situation, string> = {
   PUBLIC_NEARBY: "#2375c9", NO_NEARBY_FLOOD: "#27826b", SOURCE_DATA_INCOMPLETE: "#71808b",
 };
 
+// Shared by OperationsMap and its layer legend. Branch markers vary by situation;
+// the legend uses the normal/no-nearby-flood marker color as its representative.
+export const mapLayerColors = {
+  branches: situationColors.NO_NEARBY_FLOOD,
+  dcs: "#073b5c",
+  gistda: "#2caec4",
+  hdms: "#d43227",
+  reports: "#e7a923",
+  route: "#073b5c",
+} as const;
+
 export interface Branch { store_number:string; store_name:string; city:string; latitude:number; longitude:number; vehicle_type?:string|null; status:string }
 export interface BranchSituation { store_number:string; store_name:string; city:string; latitude:number; longitude:number; situation:Situation; gistda:{data_available:boolean;period:string;classification:string|null;inside_flood_polygon:boolean;nearest_flood_distance_km:number|null;nearest_flood_feature_id:number|null}; public:{data_available:boolean;lookback_hours:number;classification:string|null;nearest_report_code:string|null;nearest_report_distance_km:number|null;nearest_report_verification_status:string|null;nearest_report_reported_at:string|null} }
 export interface Summary { gistda_direct:number;multi_source_nearby:number;gistda_nearby:number;public_nearby:number;no_nearby_flood:number;source_data_incomplete:number }
@@ -34,7 +45,7 @@ export interface HdmsRouteEvidence {incident_id:number;source_record_id:string;c
 export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;hdms_evidence:HdmsRouteEvidence[];official_road_closure:boolean;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
 
 export const hdmsStatusStyle = (status:string) => status === "IMPASSABLE"
-  ? {color:"#8f1d16",fillColor:"#d43227",radius:10,weight:3}
+  ? {color:"#8f1d16",fillColor:mapLayerColors.hdms,radius:10,weight:3}
   : status === "PASSABLE"
     ? {color:"#a95508",fillColor:"#ed8a1c",radius:7,weight:2}
     : {color:"#536772",fillColor:"#82929a",radius:7,weight:2};
