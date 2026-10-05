@@ -28,7 +28,8 @@ export interface Summary { gistda_direct:number;multi_source_nearby:number;gistd
 export interface DC { dc_code:string;dc_name:string;latitude:number;longitude:number;status:string }
 export interface PublicReport {report_code:string;flood_location:{latitude:number;longitude:number};water_level_cm:number;road_status:string;verification_status:string;reported_at:string}
 export interface HdmsIncident {id:number;source_record_id:string;case_id:string|null;road_code:string|null;section_code:string|null;section_name:string|null;km_start:string|null;km_end:string|null;province:string|null;amphoe:string|null;tambon:string|null;water_depth_cm:number|null;road_status:"PASSABLE"|"IMPASSABLE"|"UNKNOWN";incident_at:string|null;report_at:string|null;source_updated_at:string|null;survey_at:string|null;source_status:string|null;is_active:boolean;geometry_available:boolean;road_geometry:GeoJSON.LineString|null}
-export interface RouteResult {route_id:string;origin_code:string;destination_code:string;vehicle_profile:string;distance_km:number;duration_minutes:number;route_geometry:GeoJSON.LineString;routing_provider:string;calculated_at:string}
+export type RouteSafetyState="SAFE"|"WARNING"|"BLOCKED"|"UNVERIFIED";
+export interface RouteResult {route_id:string|null;origin_type?:"DC"|"CURRENT_LOCATION";origin_code:string;destination_code:string;vehicle_profile:string;distance_km:number;duration_minutes:number;route_geometry:GeoJSON.LineString;routing_provider:string;calculated_at:string;safety_state?:RouteSafetyState;avoidance_attempted?:boolean;blocking_hazards?:Array<Record<string,unknown>>;warning_hazards?:Array<Record<string,unknown>>;evidence?:Record<string,Array<Record<string,unknown>>>;navigation_waypoints?:number[][]}
 export interface HdmsRouteEvidence {incident_id:number;source_record_id:string;case_id:string|null;road_code:string|null;section_name:string|null;road_status:string;water_depth_cm:number|null}
 export interface RouteImpact {flood_situation:string;gistda_evidence:Array<{feature_id:number;representative_intersection?:GeoJSON.Geometry|null}>;public_report_evidence:Array<{report_code:string;verification_status:string;distance_to_route_meters:number;reported_at:string}>;hdms_evidence:HdmsRouteEvidence[];official_road_closure:boolean;source_data_status:{complete:boolean;gistda:{data_available:boolean};public:{data_available:boolean}};evaluated_at:string}
 
@@ -64,4 +65,14 @@ export async function loadAllBranchSituations(fetchPage:(offset:number)=>Promise
     offset += page.items.length;
   }
   return {summary:first.summary,items};
+}
+
+export function googleMapsNavigationUrl(route:RouteResult, dc:DC|undefined, destination:Branch):string|null {
+  if(!route.safety_state||route.safety_state==="BLOCKED"||route.safety_state==="UNVERIFIED")return null;
+  const params=new URLSearchParams({api:"1",destination:`${destination.latitude},${destination.longitude}`,travelmode:"driving",dir_action:"navigate"});
+  if(route.origin_type==="DC"&&dc)params.set("origin",`${dc.latitude},${dc.longitude}`);
+  // Omitting origin intentionally lets Google Maps acquire a fresh device location.
+  const waypoints=(route.navigation_waypoints??[]).slice(0,3).map(([lng,lat])=>`${lat},${lng}`);
+  if(waypoints.length)params.set("waypoints",waypoints.join("|"));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
 }

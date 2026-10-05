@@ -61,10 +61,11 @@ class ValhallaRoutingProvider:
         self.timeout_seconds = timeout_seconds
         self.client = client
 
-    def _request_body(self, origin: Coordinates, destination: Coordinates, vehicle_profile: str) -> dict:
+    def _request_body(self, origin: Coordinates, destination: Coordinates, vehicle_profile: str,
+                      exclusion_polygons: list[list[list[float]]] | None = None) -> dict:
         if vehicle_profile not in self._supported_profiles:
             raise ValueError(f"Unsupported vehicle profile: {vehicle_profile}")
-        return {
+        body = {
             "locations": [
                 {"lat": origin[1], "lon": origin[0]},
                 {"lat": destination[1], "lon": destination[0]},
@@ -73,13 +74,28 @@ class ValhallaRoutingProvider:
             "units": "kilometers",
             "shape_format": "polyline6",
         }
+        # Valhalla's documented exclude_polygons option removes graph edges inside
+        # these rings. Rings come only from buffered authoritative hazard geometry.
+        if exclusion_polygons:
+            body["exclude_polygons"] = exclusion_polygons
+        return body
 
     def calculate_route(self, origin: Coordinates, destination: Coordinates, vehicle_profile: str) -> RouteProviderResult:
+        return self._calculate(origin, destination, vehicle_profile, None)
+
+    def calculate_route_avoiding(self, origin: Coordinates, destination: Coordinates,
+                                 vehicle_profile: str, exclusion_polygons: list[list[list[float]]]) -> RouteProviderResult:
+        if not exclusion_polygons:
+            return self.calculate_route(origin, destination, vehicle_profile)
+        return self._calculate(origin, destination, vehicle_profile, exclusion_polygons)
+
+    def _calculate(self, origin: Coordinates, destination: Coordinates, vehicle_profile: str,
+                   exclusion_polygons: list[list[list[float]]] | None) -> RouteProviderResult:
         try:
             requester = self.client or httpx
             response = requester.post(
                 f"{self.base_url}/route",
-                json=self._request_body(origin, destination, vehicle_profile),
+                json=self._request_body(origin, destination, vehicle_profile, exclusion_polygons),
                 timeout=self.timeout_seconds,
             )
         except httpx.TimeoutException as exc:
