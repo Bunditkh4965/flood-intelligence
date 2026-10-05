@@ -27,6 +27,7 @@ class HdmsIncidentRead(BaseModel):
     source_status: str | None
     is_active: bool
     geometry_available: bool
+    road_geometry: dict | None = None
     synced_at: datetime
     created_at: datetime
     updated_at: datetime
