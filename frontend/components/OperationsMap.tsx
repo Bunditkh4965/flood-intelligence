@@ -8,7 +8,7 @@ import { BranchSituation, DC, HdmsIncident, hdmsMarkerPoint, hdmsStatusStyle, Pu
 export type MapLayers = { branches:boolean; dcs:boolean; gistda:boolean; hdms:boolean; reports:boolean; route:boolean };
 type Layers = MapLayers;
 type GroupKey = keyof Layers;
-type Props = { branches:BranchSituation[]; dcs:DC[]; gistda:GeoJSON.FeatureCollection|null; hdms:HdmsIncident[]; reports:PublicReport[]; route:RouteResult|null; impact:RouteImpact|null; layers:Layers; selected?:{lat:number;lng:number;key:string}; onSelect:(store:string)=>void };
+type Props = { branches:BranchSituation[]; dcs:DC[]; gistda:GeoJSON.FeatureCollection|null; hdms:HdmsIncident[]; reports:PublicReport[]; route:RouteResult|null; impact:RouteImpact|null; layers:Layers; currentLocation?:{lat:number;lng:number}; selected?:{lat:number;lng:number;key:string}; onSelect:(store:string)=>void };
 
 export function hdmsPopup(incident:HdmsIncident):HTMLElement {
   const popup=document.createElement("div");popup.className="hdms-popup";
@@ -23,7 +23,7 @@ export function hdmsPopup(incident:HdmsIncident):HTMLElement {
   return popup;
 }
 
-export default function OperationsMap({branches,dcs,gistda,hdms,reports,route,impact,layers,selected,onSelect}:Props) {
+export default function OperationsMap({branches,dcs,gistda,hdms,reports,route,impact,layers,currentLocation,selected,onSelect}:Props) {
   const node = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map|null>(null);
   const vectorRenderer = useRef<L.SVG|null>(null);
@@ -83,7 +83,7 @@ export default function OperationsMap({branches,dcs,gistda,hdms,reports,route,im
   useEffect(() => { const group=groups.current?.gistda;if(!group)return;group.clearLayers();if(gistda)L.geoJSON(gistda,{style:{renderer:vectorRenderer.current??undefined,color:"#137e99",weight:1,fillColor:"#2caec4",fillOpacity:.22}}).addTo(group);return()=>{group.clearLayers()}; }, [gistda]);
   useEffect(() => { const group=groups.current?.hdms,renderer=vectorRenderer.current;if(!group||!renderer)return;group.clearLayers();for(const incident of hdms){const point=hdmsMarkerPoint(incident);if(!point)continue;const style=hdmsStatusStyle(incident.road_status);L.geoJSON(incident.road_geometry!,{style:{renderer,color:style.color,weight:incident.road_status==="IMPASSABLE"?5:3,opacity:.65}}).addTo(group);L.circleMarker(point,{renderer,...style,fillOpacity:1}).bindPopup(hdmsPopup(incident)).bindTooltip(`HDMS · ${incident.section_name||incident.road_code||incident.case_id||incident.source_record_id}`).addTo(group)}return()=>{group.clearLayers()}; }, [hdms]);
   useEffect(() => { const group=groups.current?.reports;if(!group)return;group.clearLayers();reports.forEach(report=>L.circleMarker([report.flood_location.latitude,report.flood_location.longitude],{renderer:vectorRenderer.current??undefined,radius:7,color:"#fff",weight:2,fillColor:"#e7a923",fillOpacity:1}).bindTooltip(`${report.report_code} · ${report.verification_status}`).addTo(group));return()=>{group.clearLayers()}; }, [reports]);
-  useEffect(() => { const group=groups.current?.route;if(!group)return;group.clearLayers();if(route)L.geoJSON(route.route_geometry,{style:{renderer:vectorRenderer.current??undefined,color:"#073b5c",weight:6,opacity:.9}}).addTo(group);impact?.gistda_evidence.forEach(e=>{if(e.representative_intersection)L.geoJSON(e.representative_intersection,{pointToLayer:(_,p)=>L.circleMarker(p,{renderer:vectorRenderer.current??undefined,radius:8,color:"#c9382b",fillOpacity:1})}).addTo(group)});return()=>{group.clearLayers()}; }, [route,impact]);
+  useEffect(() => { const group=groups.current?.route;if(!group)return;group.clearLayers();if(route)L.geoJSON(route.route_geometry,{style:{renderer:vectorRenderer.current??undefined,color:"#073b5c",weight:6,opacity:.9}}).addTo(group);if(currentLocation)L.circleMarker([currentLocation.lat,currentLocation.lng],{renderer:vectorRenderer.current??undefined,radius:10,color:"#fff",weight:3,fillColor:"#1877d2",fillOpacity:1}).bindTooltip("ตำแหน่งปัจจุบัน · จุดเริ่มต้น").addTo(group);impact?.gistda_evidence.forEach(e=>{if(e.representative_intersection)L.geoJSON(e.representative_intersection,{pointToLayer:(_,p)=>L.circleMarker(p,{renderer:vectorRenderer.current??undefined,radius:8,color:"#c9382b",fillOpacity:1})}).addTo(group)});return()=>{group.clearLayers()}; }, [route,impact,currentLocation]);
 
   useEffect(() => { const instance=map.current,stableGroups=groups.current;if(!instance||!stableGroups)return;(Object.keys(stableGroups) as GroupKey[]).forEach(key=>{const group=stableGroups[key];if(layers[key]){if(!instance.hasLayer(group))group.addTo(instance)}else if(instance.hasLayer(group))group.remove()}); }, [layers]);
   useEffect(() => { const instance=map.current;if(!instance)return;if(route){const bounds=L.geoJSON(route.route_geometry).getBounds();if(bounds.isValid())instance.fitBounds(bounds,{padding:[35,35]})}else if(selectedKey&&selectedLat!==undefined&&selectedLng!==undefined)instance.setView([selectedLat,selectedLng],14); }, [route,selectedKey,selectedLat,selectedLng]);

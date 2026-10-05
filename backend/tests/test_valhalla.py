@@ -92,6 +92,17 @@ def test_no_route_response() -> None:
         ValhallaRoutingProvider("http://valhalla", client=client).calculate_route((1, 2), (3, 4), "4W")
 
 
+def test_avoidance_polygons_are_sent_to_valhalla() -> None:
+    response = httpx.Response(200, request=httpx.Request("POST", "http://valhalla/route"),
+        json={"trip":{"summary":{"length":1,"time":60},"legs":[{"shape":SHAPE}]}})
+    client = Mock()
+    client.post.return_value = response
+    polygon = [[[100.5, 13.7], [100.6, 13.7], [100.5, 13.7]]]
+    ValhallaRoutingProvider("http://valhalla", client=client).calculate_route_avoiding(
+        (100.4, 13.6), (100.7, 13.8), "4W", polygon)
+    assert client.post.call_args.kwargs["json"]["exclude_polygons"] == polygon
+
+
 def test_provider_selection(monkeypatch) -> None:
     monkeypatch.setenv("ROUTING_PROVIDER", "valhalla")
     monkeypatch.setenv("VALHALLA_URL", "http://shared:8002")

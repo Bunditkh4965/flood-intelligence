@@ -34,6 +34,7 @@ class DistributionCenterRead(DistributionCenterCreate):
 class LocationType(StrEnum):
     DC = "DC"
     BRANCH = "BRANCH"
+    CURRENT_LOCATION = "CURRENT_LOCATION"
 
 
 class VehicleProfile(StrEnum):
@@ -51,6 +52,48 @@ class RouteCalculateRequest(BaseModel):
     origin: RouteEndpoint
     destination: RouteEndpoint
     vehicle_profile: VehicleProfile
+
+
+class SafeRouteCalculateRequest(BaseModel):
+    origin: RouteEndpoint
+    destination: RouteEndpoint
+    vehicle_profile: VehicleProfile
+    origin_coordinates: list[float] | None = Field(default=None, min_length=2, max_length=2)
+
+    @field_validator("origin_coordinates")
+    @classmethod
+    def valid_coordinates(cls, value: list[float] | None) -> list[float] | None:
+        if value is not None and (not all(map(lambda x: isinstance(x, (int, float)), value))
+                                  or not -180 <= value[0] <= 180 or not -90 <= value[1] <= 90):
+            raise ValueError("origin_coordinates must be [longitude, latitude]")
+        return value
+
+
+class RouteSafetyState(StrEnum):
+    SAFE = "SAFE"
+    WARNING = "WARNING"
+    BLOCKED = "BLOCKED"
+    UNVERIFIED = "UNVERIFIED"
+
+
+class SafeRouteRead(BaseModel):
+    route_id: str | None = None
+    origin_type: LocationType
+    origin_code: str
+    destination_type: LocationType
+    destination_code: str
+    vehicle_profile: VehicleProfile
+    distance_km: float
+    duration_minutes: float
+    route_geometry: dict
+    routing_provider: str
+    calculated_at: datetime
+    safety_state: RouteSafetyState
+    avoidance_attempted: bool
+    blocking_hazards: list[dict]
+    warning_hazards: list[dict]
+    evidence: dict
+    navigation_waypoints: list[list[float]]
 
 
 class RouteRead(BaseModel):

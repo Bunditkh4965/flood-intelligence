@@ -21,6 +21,11 @@ class RoutingProvider(Protocol):
         self, origin: Coordinates, destination: Coordinates, vehicle_profile: str
     ) -> RouteProviderResult: ...
 
+    def calculate_route_avoiding(
+        self, origin: Coordinates, destination: Coordinates, vehicle_profile: str,
+        exclusion_polygons: list[list[list[float]]],
+    ) -> RouteProviderResult: ...
+
 
 class RoutingProviderNotConfigured(RuntimeError):
     pass
@@ -55,6 +60,10 @@ class NoRoutingProvider:
     """Safe default: never fabricates a route when no engine is configured."""
 
     def calculate_route(self, origin: Coordinates, destination: Coordinates, vehicle_profile: str) -> RouteProviderResult:
+        raise RoutingProviderNotConfigured("No routing provider is configured")
+
+    def calculate_route_avoiding(self, origin: Coordinates, destination: Coordinates,
+                                 vehicle_profile: str, exclusion_polygons: list[list[list[float]]]) -> RouteProviderResult:
         raise RoutingProviderNotConfigured("No routing provider is configured")
 
 
