@@ -15,13 +15,57 @@ from app.services.routes import RouteLocationError, _normalize_result
 
 
 _BLOCKERS = text("""
-SELECT h.id, h.source_record_id, h.case_id, h.section_name, h.road_status,
- ST_AsGeoJSON(ST_Buffer(h.road_geometry::geography, 20)::geometry)::json AS polygon
+SELECT h.id, h.source_record_id, h.case_id, h.section_name, h.road_status
 FROM hdms_incidents h
 WHERE h.is_active IS TRUE AND h.geometry_available IS TRUE
  AND h.road_status='IMPASSABLE'
  AND ST_Intersects(h.road_geometry,
    ST_SetSRID(ST_GeomFromGeoJSON(:route),4326)) ORDER BY h.id
+""")
+
+# Locate crossings on a metric copy of each road, group crossings into 1 km
+# windows, and buffer only the +/- 500 m road substring.  Besides avoiding an
+# enormous polygon for a long HDMS road, grouping prevents coincident and
+# nearby crossings from producing redundant exclusion polygons.  Every output
+# is at most about 2 km long (a group can span its 1 km bucket plus the two
+# 500 m margins), keeping its buffered perimeter comfortably below Valhalla's
+# 10 km limit.  The final safety query above deliberately still uses the full
+# authoritative road geometry.
+_EXCLUSION_POLYGONS = text("""
+WITH route AS (
+  SELECT ST_SetSRID(ST_GeomFromGeoJSON(:route), 4326) AS geom
+), roads AS (
+  SELECT h.id, ST_Transform(ST_LineMerge(h.road_geometry), 3857) AS road
+  FROM hdms_incidents h, route r
+  WHERE h.is_active IS TRUE AND h.geometry_available IS TRUE
+    AND h.road_status = 'IMPASSABLE'
+    AND ST_Intersects(h.road_geometry, r.geom)
+), crossings AS (
+  SELECT roads.id, roads.road,
+    ST_LineLocatePoint(roads.road, ST_Transform((dp).geom, 3857))
+      * ST_Length(roads.road) AS measure_m
+  FROM roads, route r
+  CROSS JOIN LATERAL ST_DumpPoints(
+    ST_Intersection(ST_Transform(r.geom, 3857), roads.road)
+  ) AS dp
+), crossing_groups AS (
+  SELECT id, road, floor(measure_m / 1000.0) AS window,
+    min(measure_m) AS first_m, max(measure_m) AS last_m
+  FROM crossings
+  GROUP BY id, road, floor(measure_m / 1000.0)
+), local_segments AS (
+  SELECT id, window, ST_LineSubstring(
+    road,
+    greatest(0.0, first_m - 500.0) / nullif(ST_Length(road), 0),
+    least(ST_Length(road), last_m + 500.0) / nullif(ST_Length(road), 0)
+  ) AS segment
+  FROM crossing_groups
+)
+SELECT id, window,
+  ST_AsGeoJSON(ST_Transform(ST_Buffer(segment, 20), 4326))::json AS polygon
+FROM local_segments
+WHERE segment IS NOT NULL AND NOT ST_IsEmpty(segment)
+ORDER BY id, window
 """)
 
 _EVIDENCE = text("""
@@ -89,10 +133,14 @@ def calculate_safe_route(db: Session, request: SafeRouteCalculateRequest, provid
     candidate = _anchor(_normalize_result(provider.calculate_route(
         origin, destination, request.vehicle_profile.value)), origin, destination)
     route_json = json.dumps(candidate.route_geometry)
-    blockers = [dict(row) for row in db.execute(_BLOCKERS, {"route": route_json}).mappings()]
+    exclusions = [dict(row) for row in db.execute(
+        _EXCLUSION_POLYGONS, {"route": route_json}
+    ).mappings()]
     result, attempted = candidate, False
-    if blockers:
-        polygons = [row["polygon"]["coordinates"][0] for row in blockers]
+    if exclusions:
+        # ST_Buffer(LineString) produces Polygon GeoJSON. PostGIS and Valhalla
+        # both use GeoJSON's [longitude, latitude] coordinate order here.
+        polygons = [row["polygon"]["coordinates"][0] for row in exclusions]
         attempted = True
         result = _anchor(_normalize_result(provider.calculate_route_avoiding(
             origin, destination, request.vehicle_profile.value, polygons)), origin, destination)
