@@ -1,4 +1,5 @@
 import math
+import re
 from collections.abc import Sequence
 
 import httpx
@@ -104,11 +105,13 @@ class ValhallaRoutingProvider:
             raise RoutingProviderConnectionError("Could not connect to Valhalla") from exc
 
         if not 200 <= response.status_code < 300:
+            detail = self._safe_error_detail(response)
+            message = f"Valhalla returned HTTP {response.status_code}"
+            if detail:
+                message += f": {detail}"
             if response.status_code in {404, 422}:
-                raise NoRouteFound("Valhalla could not find a route")
-            raise RoutingProviderResponseError(
-                f"Valhalla returned HTTP {response.status_code}"
-            )
+                raise NoRouteFound(message)
+            raise RoutingProviderResponseError(message)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -141,3 +144,24 @@ class ValhallaRoutingProvider:
             provider_name=self.provider_name,
             provider_route_id=str(trip["id"]) if trip.get("id") is not None else None,
         )
+
+    @staticmethod
+    def _safe_error_detail(response: httpx.Response) -> str:
+        """Extract bounded provider diagnostics without reflecting request secrets."""
+        detail = ""
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                values = [payload.get(key) for key in ("error", "message", "detail", "error_code")]
+                detail = " ".join(str(value) for value in values if isinstance(value, (str, int, float)))
+        except ValueError:
+            detail = response.text
+        detail = " ".join(detail.split())[:300]
+        detail = re.sub(
+            r"(?i)(authorization|api[_-]?key|token|password)\s*[:=]\s*[^\s,;]+",
+            r"\1=[REDACTED]",
+            detail,
+        )
+        # Query strings frequently contain credentials; retaining the provider
+        # path and prose is enough for diagnosis.
+        return re.sub(r"(https?://[^?\s]+)\?[^\s]+", r"\1?[REDACTED]", detail)
