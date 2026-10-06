@@ -147,3 +147,27 @@ def test_clear_alternate_can_be_safe_or_warning(monkeypatch, evidence, expected)
         REQUEST, provider, "1day", 100, 100,
     )
     assert response.safety_state is expected
+
+
+@pytest.mark.parametrize("blocked,available,warning,expected", [
+    (True, False, True, RouteSafetyState.BLOCKED),
+    (True, True, False, RouteSafetyState.BLOCKED),
+    (False, False, True, RouteSafetyState.UNVERIFIED),
+    (False, False, False, RouteSafetyState.UNVERIFIED),
+    (False, True, True, RouteSafetyState.WARNING),
+    (False, True, False, RouteSafetyState.SAFE),
+])
+def test_safety_state_precedence_regression(monkeypatch, blocked, available, warning, expected):
+    _locations(monkeypatch)
+    provider = Mock()
+    provider.calculate_route.return_value = _result([[100, 13], [100.05, 13.05], [100.1, 13.1]])
+    response = safe_routes.calculate_safe_route(
+        _db([], final_blockers=[{"id": 115}] if blocked else [],
+            evidence=[{"source": "GISTDA", "evidence_id": "x", "severity": "WARNING"}] if warning else [],
+            availability={"hdms": available, "gistda": True, "bma": True, "public": True}),
+        REQUEST, provider, "1DAY", 100, 100,
+    )
+    assert response.safety_state is expected
+    assert response.avoidance_attempted is False
+    assert response.navigation_waypoints == [[100.05, 13.05]]
+    provider.calculate_route_avoiding.assert_not_called()

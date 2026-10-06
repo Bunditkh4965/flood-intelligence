@@ -51,15 +51,15 @@ def classify_situation(
     return SituationCategory.SOURCE_DATA_INCOMPLETE
 
 
-def _combined_query() -> str:
+def _combined_query(branch_predicate: str = "lower(b.status) = 'active'") -> str:
     gistda = (
-        impact_cte("lower(b.status) = 'active'") + " SELECT * FROM classified"
+        impact_cte(branch_predicate) + " SELECT * FROM classified"
     ).replace(":proximity_km", ":gistda_proximity_km")
     public = (
-        public_impact_cte("lower(b.status) = 'active'") + " SELECT * FROM classified"
+        public_impact_cte(branch_predicate) + " SELECT * FROM classified"
     ).replace(":proximity_km", ":public_proximity_km")
     return f"""
-WITH gistda_result AS ({gistda}), public_result AS ({public}), combined AS (
+WITH gistda_result AS ({gistda}), public_result AS ({public}), combined AS MATERIALIZED (
  SELECT g.*, p.public_impact_classification, p.nearest_report_code,
   p.nearest_report_distance_km, p.nearest_report_verification_status, p.nearest_report_reported_at,
   h.id nearest_hdms_incident_id, h.case_id nearest_hdms_case_id, h.distance_km nearest_hdms_distance_km,
@@ -198,20 +198,23 @@ def calculate_situations(
     db, period, gkm, pkm, hkm, bkm, lookback, situation, limit, offset
 ):
     params, ga, pa, ha, ba = _params(db, period, gkm, pkm, hkm, bkm, lookback)
-    counts = db.execute(
-        text(
-            _combined_query()
-            + " SELECT situation,count(*) count FROM combined GROUP BY situation"
-        ),
-        params,
-    ).mappings()
-    summary = {c.value.lower(): 0 for c in SituationCategory}
-    for c in counts:
-        summary[c["situation"].lower()] = c["count"]
+    # Both consumers share one spatial assessment. Aggregate before filtering or
+    # pagination, and keep a summary row even when the requested page is empty.
     rows = db.execute(
         text(
             _combined_query()
-            + " SELECT * FROM combined WHERE (CAST(:situation AS text) IS NULL OR situation=:situation) ORDER BY store_number LIMIT :limit OFFSET :offset"
+            + """, summary AS (
+ SELECT jsonb_object_agg(lower(situation), count) AS counts
+ FROM (SELECT situation, count(*) AS count FROM combined GROUP BY situation) counts
+)
+SELECT summary.counts AS summary_counts, page.*
+FROM summary LEFT JOIN LATERAL (
+ SELECT * FROM combined
+ WHERE (CAST(:situation AS text) IS NULL OR situation=:situation)
+ ORDER BY store_number LIMIT :limit OFFSET :offset
+) page ON TRUE
+ORDER BY page.store_number
+"""
         ),
         {
             **params,
@@ -220,9 +223,13 @@ def calculate_situations(
             "offset": offset,
         },
     ).mappings()
-    return SituationPage(
-        summary, [_item(r, period, lookback, ga, pa, ha, ba) for r in rows]
-    )
+    summary = {c.value.lower(): 0 for c in SituationCategory}
+    items = []
+    for row in rows:
+        summary.update(row["summary_counts"] or {})
+        if row["store_number"] is not None:
+            items.append(_item(row, period, lookback, ga, pa, ha, ba))
+    return SituationPage(summary, items)
 
 
 def calculate_situation(db, store_number, period, gkm, pkm, hkm, bkm, lookback):
@@ -230,8 +237,10 @@ def calculate_situation(db, store_number, period, gkm, pkm, hkm, bkm, lookback):
     row = (
         db.execute(
             text(
-                _combined_query()
-                + " SELECT * FROM combined WHERE store_number=:store_number"
+                _combined_query(
+                    "lower(b.status) = 'active' AND b.store_number = :store_number"
+                )
+                + " SELECT * FROM combined"
             ),
             {**params, "store_number": store_number},
         )

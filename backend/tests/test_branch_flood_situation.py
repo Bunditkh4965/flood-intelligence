@@ -278,3 +278,46 @@ def test_hdms_impassable_and_bma_evidence_precedence():
         classify_situation("NEARBY", "PUBLIC_NONE", True, True, True, False, True, True)
         == "MULTI_SOURCE_NEARBY"
     )
+
+
+def test_single_lookup_pushes_bound_predicate_into_both_source_queries(monkeypatch):
+    from app.services import branch_flood_situation as service
+
+    monkeypatch.setattr(service, "_params", lambda *args: ({}, True, True, True, True))
+    class LookupDb(AvailabilityDb):
+        def execute(self, statement, parameters):
+            self.statement = str(statement)
+            self.parameters = parameters
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(one_or_none=lambda: None))
+
+    db = LookupDb({})
+    assert service.calculate_situation(db, "5537", "3DAYS", 5, 5, 5, 5, 24) is None
+    predicate = "WHERE lower(b.status) = 'active' AND b.store_number = :store_number"
+    assert db.statement.count(predicate) == 2
+    assert "5537" not in db.statement
+    assert db.parameters["store_number"] == "5537"
+
+
+@pytest.mark.parametrize("counts", [{"gistda_direct": 3}, None])
+def test_collection_empty_page_keeps_summary_and_executes_assessment_once(monkeypatch, counts):
+    from app.services import branch_flood_situation as service
+
+    monkeypatch.setattr(service, "_params", lambda *args: ({}, True, True, True, True))
+    calls = []
+
+    def execute(statement, parameters):
+        calls.append((str(statement), parameters))
+        return SimpleNamespace(mappings=lambda: [{"summary_counts": counts, "store_number": None}])
+
+    page = service.calculate_situations(
+        SimpleNamespace(execute=execute), "3DAYS", 5, 5, 5, 5, 24,
+        SituationCategory.PUBLIC_NEARBY, 1, 999,
+    )
+    assert page.items == []
+    assert page.summary["gistda_direct"] == (3 if counts else 0)
+    assert len(page.summary) == len(SituationCategory)
+    assert len(calls) == 1
+    sql, params = calls[0]
+    assert sql.count("combined AS MATERIALIZED") == 1
+    assert params["situation"] == "PUBLIC_NEARBY"
+    assert (params["limit"], params["offset"]) == (1, 999)
