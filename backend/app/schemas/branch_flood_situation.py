@@ -14,6 +14,8 @@ class SituationCategory(StrEnum):
     MULTI_SOURCE_NEARBY = "MULTI_SOURCE_NEARBY"
     GISTDA_NEARBY = "GISTDA_NEARBY"
     PUBLIC_NEARBY = "PUBLIC_NEARBY"
+    HDMS_NEARBY = "HDMS_NEARBY"
+    BMA_NEARBY = "BMA_NEARBY"
     NO_NEARBY_FLOOD = "NO_NEARBY_FLOOD"
     SOURCE_DATA_INCOMPLETE = "SOURCE_DATA_INCOMPLETE"
 
@@ -37,6 +39,28 @@ class PublicSituation(BaseModel):
     nearest_report_reported_at: datetime | None
 
 
+class HdmsSituation(BaseModel):
+    data_available: bool
+    evidence_detected: bool
+    nearest_incident_id: int | None
+    nearest_case_id: str | None
+    nearest_distance_km: float | None
+    road_code: str | None
+    section_name: str | None
+    road_status: str | None
+
+
+class BmaSituation(BaseModel):
+    data_available: bool
+    evidence_detected: bool
+    nearest_observation_id: int | None
+    nearest_distance_km: float | None
+    station_name: str | None
+    road_name: str | None
+    water_level_cm: float | None
+    source_status: str | None
+
+
 class BranchFloodSituation(BaseModel):
     store_number: str
     store_name: str
@@ -45,6 +69,8 @@ class BranchFloodSituation(BaseModel):
     longitude: float
     situation: SituationCategory
     gistda: GistdaSituation
+    hdms: HdmsSituation
+    bma: BmaSituation
     public: PublicSituation
 
 
@@ -53,6 +79,8 @@ class SituationSummary(BaseModel):
     multi_source_nearby: int = 0
     gistda_nearby: int = 0
     public_nearby: int = 0
+    hdms_nearby: int = 0
+    bma_nearby: int = 0
     no_nearby_flood: int = 0
     source_data_incomplete: int = 0
 
@@ -61,6 +89,8 @@ class BranchFloodSituationResponse(BaseModel):
     period: str
     gistda_proximity_km: float = Field(gt=0, le=500)
     public_proximity_km: float = Field(gt=0, le=100)
+    hdms_proximity_km: float = Field(gt=0, le=100)
+    bma_proximity_km: float = Field(gt=0, le=100)
     public_lookback_hours: int = Field(gt=0, le=168)
     summary: SituationSummary
     limit: int
