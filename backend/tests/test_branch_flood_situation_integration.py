@@ -1,5 +1,6 @@
 """Execute the performance fix and its query plans in an isolated PostGIS DB."""
 
+import importlib.util
 import os
 from itertools import product
 from pathlib import Path
@@ -8,6 +9,8 @@ from urllib.parse import urlparse
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
@@ -174,3 +177,112 @@ def test_public_window_verification_and_inactive_evidence_regression(db):
     assert service.calculate_situation(db, "4", "3DAYS", 5, 5, 5, 5, 24)["situation"] == "PUBLIC_NEARBY"
     db.execute(text("UPDATE flood_reports SET status='CLOSED'"))
     assert service.calculate_situation(db, "4", "3DAYS", 5, 5, 5, 5, 24)["situation"] == "NO_NEARBY_FLOOD"
+
+
+def test_geography_indexes_serve_list_laterals_and_preserve_complete_responses(db):
+    # Distant source rows make the planner's choice representative without
+    # forcing index use. Neither source's existing geometry GiST can serve
+    # these geodesic ST_DWithin predicates.
+    db.execute(text("""
+        INSERT INTO hdms_incidents(source_record_id,road_status,is_active,
+            road_geometry,geometry_available,source_metadata,synced_at)
+        SELECT 'distant-'||i,'IMPASSABLE',true,
+            ST_MakeLine(ST_Point(10+i/10000.0,10),ST_Point(10+i/10000.0,10.001)),
+            true,'{}',now() FROM generate_series(1,1000) i
+    """))
+    db.execute(text("""
+        INSERT INTO bma_road_water_observations(source_record_id,station_id,
+            source_latitude,source_longitude,location,fingerprint,is_active,synced_at)
+        SELECT 'distant-'||i,i::text,10,10+i/10000.0,
+            ST_Point(10+i/10000.0,10),i::text,true,now()
+        FROM generate_series(1,1000) i
+    """))
+    db.execute(text("ANALYZE hdms_incidents"))
+    db.execute(text("ANALYZE bma_road_water_observations"))
+    params, *_ = service._params(db, "3DAYS", 5, 5, 5, 5, 24)
+    sql = service._combined_query() + " SELECT * FROM combined"
+    plan = db.execute(text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql), params).scalar()[0]["Plan"]
+    for name in ("ix_hdms_incidents_active_geography_gist", "ix_bma_road_water_active_geography_gist"):
+        scans = [node for node in _nodes(plan) if node.get("Index Name") == name]
+        assert len(scans) == 1
+        assert scans[0]["Actual Loops"] == 7
+        assert scans[0]["Actual Rows"] <= 1
+
+    indexed = _page(db)
+    indexed_filtered = _page(db, SituationCategory.HDMS_NEARBY, limit=1)
+    indexed_second = _page(db, limit=1, offset=1)
+    indexed_empty = _page(db, SituationCategory.GISTDA_DIRECT, offset=999)
+    db.execute(text("SET LOCAL enable_indexscan=off"))
+    db.execute(text("SET LOCAL enable_bitmapscan=off"))
+    assert _page(db) == indexed
+    assert _page(db, SituationCategory.HDMS_NEARBY, limit=1) == indexed_filtered
+    assert _page(db, limit=1, offset=1) == indexed_second
+    assert _page(db, SituationCategory.GISTDA_DIRECT, offset=999) == indexed_empty
+    assert indexed_filtered.summary == indexed_empty.summary == indexed.summary
+    assert sum(indexed.summary.values()) == 7
+
+
+def test_indexed_geodesic_boundaries_and_hdms_closure_priority(db):
+    db.execute(text("SET LOCAL enable_seqscan=off"))
+    db.execute(text("DELETE FROM hdms_incidents"))
+    db.execute(text("DELETE FROM bma_road_water_observations"))
+    # At the equator, projecting 4,999/5,001 metres distinguishes geography
+    # distance from a degrees-based approximation. Closed roads outrank a
+    # closer passable road, but only when within the configured radius.
+    db.execute(text("""
+        INSERT INTO hdms_incidents(source_record_id,road_status,is_active,
+            road_geometry,geometry_available,source_metadata,synced_at)
+        SELECT code,status,active,
+            ST_MakeLine(pt::geometry,ST_Project(pt,1,0)::geometry),true,'{}',now()
+        FROM (VALUES
+            ('near-passable','PASSABLE',true,ST_Project(ST_Point(0,0)::geography,100,0)),
+            ('inside-closed','IMPASSABLE',true,ST_Project(ST_Point(0,0)::geography,4999,0)),
+            ('outside-closed','IMPASSABLE',true,ST_Project(ST_Point(0,0)::geography,5001,0)),
+            ('inactive-closed','IMPASSABLE',false,ST_Project(ST_Point(0,0)::geography,1,0))
+        ) candidates(code,status,active,pt)
+    """))
+    db.execute(text("""
+        INSERT INTO bma_road_water_observations(source_record_id,station_id,
+            source_latitude,source_longitude,location,fingerprint,is_active,synced_at)
+        SELECT code,code,ST_Y(pt::geometry),ST_X(pt::geometry),pt::geometry,code,active,now()
+        FROM (VALUES
+            ('inside',true,ST_Project(ST_Point(0,0)::geography,4999,0)),
+            ('outside',true,ST_Project(ST_Point(0,0)::geography,5001,0)),
+            ('inactive',false,ST_Project(ST_Point(0,0)::geography,1,0))
+        ) candidates(code,active,pt)
+    """))
+    item = service.calculate_situation(db, "0", "3DAYS", 5, 5, 5, 5, 24)
+    assert item["hdms"]["road_status"] == "IMPASSABLE"
+    assert item["hdms"]["nearest_distance_km"] == pytest.approx(4.999, abs=1e-6)
+    assert item["bma"]["nearest_distance_km"] == pytest.approx(4.999, abs=1e-6)
+    assert item["situation"] == "MULTI_SOURCE_NEARBY"
+    db.execute(text("UPDATE hdms_incidents SET is_active=false WHERE source_record_id='inside-closed'"))
+    db.execute(text("UPDATE bma_road_water_observations SET is_active=false WHERE source_record_id='inside'"))
+    item = service.calculate_situation(db, "0", "3DAYS", 5, 5, 5, 5, 24)
+    assert item["hdms"]["road_status"] == "PASSABLE"
+    assert item["bma"]["evidence_detected"] is False
+    assert item["bma"]["data_available"] is True  # The active outside row is retained data.
+
+
+def test_geography_index_migration_is_reversible_without_changing_results(db):
+    path = (Path(__file__).parents[2] / "database" / "migrations" / "versions"
+            / "20261006_0011_index_branch_situation_geography.py")
+    spec = importlib.util.spec_from_file_location("branch_geography_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    expected = _page(db)
+    names = {"ix_hdms_incidents_active_geography_gist", "ix_bma_road_water_active_geography_gist"}
+
+    def existing_indexes():
+        return set(db.execute(text("SELECT indexname FROM pg_indexes WHERE schemaname='public'")).scalars())
+
+    assert names <= existing_indexes()
+    # Run both DDL directions inside this fixture's rollback transaction, so
+    # the dedicated test database retains its migrated version and indexes.
+    with Operations.context(MigrationContext.configure(db.connection())):
+        migration.downgrade()
+        assert not names & existing_indexes()
+        assert _page(db) == expected
+        migration.upgrade()
+        assert names <= existing_indexes()
+        assert _page(db) == expected
