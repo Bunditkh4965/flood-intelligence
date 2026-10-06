@@ -17,7 +17,7 @@ export const routeSituationLabels: Record<string, string> = {
   GISTDA_DIRECT: "เส้นทางตัดกับพื้นที่น้ำท่วม GISTDA",
   PUBLIC_NEARBY_ROUTE: "มีรายงานน้ำท่วมใกล้เส้นทาง",
   MULTI_SOURCE_ROUTE_IMPACT: "พบหลักฐานจากหลายแหล่งใกล้/บนเส้นทาง",
-  SOURCE_DATA_INCOMPLETE: "การประเมินบริเวณสาขายังไม่ครบถ้วน",
+  SOURCE_DATA_INCOMPLETE: "การประเมินเส้นทางยังไม่ครบถ้วน",
 };
 export const situationColors: Record<Situation, string> = {
   GISTDA_DIRECT: "#c9382b", MULTI_SOURCE_NEARBY: "#8b3fb3", GISTDA_NEARBY: "#eb8b22",
@@ -96,3 +96,4 @@ export function googleMapsNavigationUrl(route:RouteResult, dc:DC|undefined, dest
   if(waypoints.length)params.set("waypoints",waypoints.join("|"));
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
+
